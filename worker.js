@@ -37,12 +37,12 @@ export default {
       }
 
       const upstream =
-        `https://api.airplanes.live/v2/point/${lat}/${lon}/${radius}`;
+        `https://api.adsb.lol/v2/point/${lat}/${lon}/${radius}`;
 
       const response = await fetch(upstream, {
         headers: {
           "Accept": "application/json",
-          "User-Agent": "Flight-Tracker/0.3"
+          "User-Agent": "Flight-Tracker/0.4"
         }
       });
 
