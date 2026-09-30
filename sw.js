@@ -1,0 +1,1 @@
+const C='flight-tracker-v0.1';self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['./','./index.html','./style.css','./app.js','./manifest.json']))));self.addEventListener('fetch',e=>{if(e.request.url.includes('airplanes.live')||e.request.url.includes('openstreetmap'))return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})
