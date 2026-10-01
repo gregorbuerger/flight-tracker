@@ -1,1 +1,1 @@
-v2.4 globale Suche: Relay-Pfad /search/<Kennzeichen|Callsign|ICAO>. Direkter Test z.B. https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/search/9H-QBA
+v2.5: Ein Relay-Codepfad (main.ts). Suche unterstuetzt Query (?mode=search&q=9H-QBA) und /search/9H-QBA. Antworten enthalten ft_relay_version und ft_mode zur Diagnose.
