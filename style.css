@@ -19,3 +19,5 @@
 
 /* v1.6: complete aircraft photos; conservative flight-kind classification */
 .detailPhoto{height:auto;max-height:42vh;object-fit:contain;background:#0f1c2e}
+
+/* v1.7: stable map-area refresh with debouncing and stale-request cancellation */

@@ -3,6 +3,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,att
 L.control.zoom({position:'bottomright'}).addTo(map);
 const statusEl=document.querySelector('#status'),sheet=document.querySelector('#sheet'),notice=document.querySelector('#notice');
 let markerByHex=new Map(),center=[48,10],locationMarker=null,accuracyCircle=null,loading=false,lastLoad=0,lastGood=[],lastSuccess=0,failCount=0,selectedHex=null,selectedAircraft=null,selectedMissingSince=0,trailLayer=null,trailByHex=new Map(),routeLayer=null;
+let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,mapReloadTimer=null;
 const enrichCache=new Map(),enrichPending=new Map();
 const REFRESH_MS=15000, MOVE_MS=14000;
 let nextRefreshAt=Date.now()+REFRESH_MS;const countdownEl=document.querySelector('#countdown'),refreshRing=document.querySelector('#refreshRing');
@@ -14,7 +15,8 @@ const machText=v=>v==null?'':`Mach ${Number(v).toFixed(2).replace('.',',')}`;
 const metres=v=>v==null?'—':Math.round(v).toLocaleString('de-DE')+' m';
 function compass(d){if(d==null)return'—';return ['N','NO','O','SO','S','SW','W','NW'][Math.round(d/45)%8]+' · '+Math.round(d)+'°'}
 function ageText(){if(!lastSuccess)return'';const s=Math.max(0,Math.round((Date.now()-lastSuccess)/1000));return s<5?'gerade aktualisiert':`vor ${s} Sek. aktualisiert`}
-function updateStatus(){if(lastGood.length)statusEl.textContent=`${lastGood.length} Flugzeuge · ${ageText()}`;}
+function visibleAircraftCount(){const b=map.getBounds();let n=0;for(const a of lastGood)if(a.lat!=null&&a.lon!=null&&b.contains([a.lat,a.lon]))n++;return n}
+function updateStatus(){if(lastGood.length){const n=visibleAircraftCount();statusEl.textContent=`${n} Flugzeuge im Kartenausschnitt · ${ageText()}`;}}
 const airlines={RYR:'Ryanair',DLH:'Lufthansa',AIC:'Air India',LOT:'LOT Polish Airlines',EWG:'Eurowings',EZY:'easyJet',SWR:'SWISS',AUA:'Austrian Airlines',BAW:'British Airways',KLM:'KLM',AFR:'Air France',THY:'Turkish Airlines',UAE:'Emirates',QTR:'Qatar Airways',SAS:'SAS',IBE:'Iberia',VLG:'Vueling',WZZ:'Wizz Air',CFG:'Condor',TUI:'TUI fly',BEL:'Brussels Airlines'};
 function airlineName(a){const f=(a.flight||'').trim().toUpperCase(),m=f.match(/^([A-Z]{3})/);return m&&airlines[m[1]]?airlines[m[1]]:''}
 function airportLabel(x){if(!x)return'';return x.iata_code||x.icao_code||x.municipality||x.name||''}
@@ -92,10 +94,45 @@ function animateMarker(obj,a){
   obj.animFrame=requestAnimationFrame(step)
 }
 function draw(list){lastGood=list;const next=new Map();for(const a of list){if(a.lat==null||a.lon==null)continue;addTrailPoint(a);const key=a.hex||`${a.lat}:${a.lon}:${a.flight}`;let obj=markerByHex.get(key);if(obj){obj.aircraft=a;animateMarker(obj,a);obj.marker.setIcon(craftIcon(a,key===selectedHex))}else{const m=L.marker([a.lat,a.lon],{icon:craftIcon(a,key===selectedHex),keyboard:false,riseOnHover:true}).addTo(map);obj={marker:m,aircraft:a};m.on('click',()=>selectAircraft(obj.aircraft))}next.set(key,obj)}if(selectedHex&&!next.has(selectedHex)&&markerByHex.has(selectedHex)){if(!selectedMissingSince)selectedMissingSince=Date.now();if(Date.now()-selectedMissingSince<20000){const held=markerByHex.get(selectedHex);held.marker.setIcon(craftIcon(held.aircraft,true));held.marker.setZIndexOffset(2000);next.set(selectedHex,held)}}for(const [key,obj] of markerByHex)if(!next.has(key)){if(obj.animFrame)cancelAnimationFrame(obj.animFrame);map.removeLayer(obj.marker);}markerByHex=next;if(selectedHex&&markerByHex.has(selectedHex)){const fresh=markerByHex.get(selectedHex).aircraft;if(list.some(a=>a.hex===selectedHex)){selectedMissingSince=0;fresh.enrichment=selectedAircraft?.enrichment;selectedAircraft=fresh;fillDetails(selectedAircraft)}markerByHex.get(selectedHex).marker.setZIndexOffset(2000)}else if(selectedHex&&selectedMissingSince&&Date.now()-selectedMissingSince>=20000){selectedHex=null;selectedAircraft=null;selectedMissingSince=0;sheet.classList.add('hidden');if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}}lastSuccess=Date.now();failCount=0;notice.classList.add('hiddenNotice');updateStatus()}
-async function fetchProxy(){const c=map.getCenter(),u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/');u.searchParams.set('lat',c.lat.toFixed(4));u.searchParams.set('lon',c.lng.toFixed(4));u.searchParams.set('radius','100');const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);try{const r=await fetch(u,{cache:'no-store',signal:controller.signal});if(!r.ok)throw Error('Flight Tracker API '+r.status);const d=await r.json();return(d.ac||[]).map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}finally{clearTimeout(timer)}}
-async function load(force=false){if(loading)return;if(!force&&Date.now()-lastLoad<4000)return;loading=true;lastLoad=Date.now();refreshRing.classList.add('loading');if(!lastGood.length)statusEl.textContent='Live-Flugzeuge werden geladen…';try{draw(await fetchProxy())}catch(e){console.warn(e);failCount++;if(lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}}else{statusEl.textContent='Live-Daten nicht erreichbar';notice.textContent='Die Live-Flugdaten antworten gerade nicht. Tippe hier für einen neuen Versuch.';notice.classList.remove('hiddenNotice');setTimeout(()=>{if(!lastGood.length)load(true)},6000)}}finally{loading=false;refreshRing.classList.remove('loading');nextRefreshAt=Date.now()+REFRESH_MS}}
+function queryForCurrentMap(){
+  const b=map.getBounds(),c=b.getCenter();
+  const corners=[b.getNorthWest(),b.getNorthEast(),b.getSouthWest(),b.getSouthEast()];
+  let maxM=0; for(const x of corners)maxM=Math.max(maxM,map.distance(c,x));
+  // adsb.lol point endpoint accepts nautical miles. Add a small margin, capped at 250 NM.
+  const radius=Math.min(250,Math.max(10,Math.ceil((maxM/1852)*1.12)));
+  return {lat:c.lat,lon:c.lng,radius};
+}
+async function fetchProxy(signal,query){const u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/');u.searchParams.set('lat',query.lat.toFixed(4));u.searchParams.set('lon',query.lon.toFixed(4));u.searchParams.set('radius',String(query.radius));const r=await fetch(u,{cache:'no-store',signal});if(!r.ok)throw Error('Flight Tracker API '+r.status);const d=await r.json();return(d.ac||[]).map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}
+async function load(force=false){
+  if(mapInteraction&&!force)return;
+  if(!force&&Date.now()-lastLoad<4000)return;
+  const seq=++requestSeq,query=queryForCurrentMap();
+  if(activeController)activeController.abort();
+  const controller=new AbortController(); activeController=controller;
+  const timer=setTimeout(()=>controller.abort(),12000);
+  loading=true;lastLoad=Date.now();refreshRing.classList.add('loading');
+  if(!lastGood.length)statusEl.textContent='Live-Flugzeuge werden geladen…';
+  try{
+    const list=await fetchProxy(controller.signal,query);
+    if(seq!==requestSeq)return; // stale response from an older map area
+    latestAppliedSeq=seq;draw(list);
+  }catch(e){
+    if(e?.name==='AbortError'){return;}
+    if(seq!==requestSeq)return;
+    console.warn(e);failCount++;
+    if(lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}}
+    else{statusEl.textContent='Live-Daten nicht erreichbar';notice.textContent='Die Live-Flugdaten antworten gerade nicht. Tippe hier für einen neuen Versuch.';notice.classList.remove('hiddenNotice');setTimeout(()=>{if(!lastGood.length)load(true)},6000)}
+  }finally{
+    clearTimeout(timer);
+    if(seq===requestSeq){loading=false;activeController=null;refreshRing.classList.remove('loading');nextRefreshAt=Date.now()+REFRESH_MS}
+  }
+}
+function scheduleMapReload(){
+  clearTimeout(mapReloadTimer);
+  mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;load(true)},700);
+}
 function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';setTimeout(()=>load(true),250)}
 function locate(){if(!navigator.geolocation){statusEl.textContent='Standort wird von diesem Browser nicht unterstützt';return}if(!lastGood.length)statusEl.textContent='Standort wird gesucht…';navigator.geolocation.getCurrentPosition(setLocation,e=>{const msg=e.code===1?'Standortzugriff nicht erlaubt':e.code===2?'Standort nicht verfügbar':'Standortsuche dauerte zu lange';statusEl.textContent=msg;notice.textContent=msg+'. Du kannst die Karte trotzdem verschieben und Live-Daten laden.';notice.classList.remove('hiddenNotice');load(true)},{enableHighAccuracy:true,timeout:12000,maximumAge:30000})}
-document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true);map.on('moveend',()=>{const c=map.getCenter();center=[c.lat,c.lng];load()});map.on('zoomend',refreshMarkerStyles);
+document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true);map.on('movestart zoomstart',()=>{mapInteraction=true;clearTimeout(mapReloadTimer);if(activeController)activeController.abort()});map.on('moveend',scheduleMapReload);map.on('zoomend',()=>{refreshMarkerStyles();scheduleMapReload()});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').then(r=>r.update()).catch(()=>{});
 setTimeout(locate,500);setInterval(()=>{if(document.visibilityState==='visible'&&!loading&&Date.now()>=nextRefreshAt)load()},250);setInterval(()=>{if(lastGood.length&&!loading)updateStatus();const left=Math.max(0,nextRefreshAt-Date.now());const sec=Math.max(0,Math.ceil(left/1000));countdownEl.textContent=sec||'0';refreshRing.style.setProperty('--p',`${Math.min(360,Math.max(0,(1-left/REFRESH_MS)*360))}deg`)},200);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){nextRefreshAt=Date.now();load(true)}});
