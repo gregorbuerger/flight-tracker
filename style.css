@@ -21,3 +21,9 @@
 .detailPhoto{height:auto;max-height:42vh;object-fit:contain;background:#0f1c2e}
 
 /* v1.7: stable map-area refresh with debouncing and stale-request cancellation */
+
+/* v1.9 global aircraft search + verified position-aware routes */
+#searchBar{position:fixed;z-index:1040;left:14px;right:14px;top:max(84px,calc(env(safe-area-inset-top) + 70px));display:flex;gap:8px;pointer-events:auto}
+#flightSearch{min-width:0;flex:1;height:42px;border:0;border-radius:14px;background:rgba(255,255,255,.96);color:#0b1626;padding:0 14px;font-size:15px;box-shadow:0 5px 18px #0002;outline:none}
+#searchBtn{height:42px;border-radius:14px;background:#1d73ea;color:#fff;padding:0 15px;font-weight:800}
+.searchMsg{position:fixed;z-index:1045;left:18px;right:18px;top:max(132px,calc(env(safe-area-inset-top) + 118px));padding:9px 12px;border-radius:12px;background:rgba(8,17,31,.92);color:#dbe8f8;font-size:12px;box-shadow:0 5px 18px #0003}.hiddenSearch{display:none}

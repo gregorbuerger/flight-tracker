@@ -1,0 +1,3 @@
+Flight Tracker v1.8
+
+ADSBDB route data is not displayed as current-flight truth. Callsign-based route records can belong to a different flight instance. Aircraft metadata remains available. Current-flight route/times are prepared for a date-aware provider (e.g. AirLabs) once a private API key is configured server-side.
