@@ -60,7 +60,7 @@ async function lookupVerifiedRoute(a){
   const task=(async()=>{try{
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),7000);
     try{
-      const u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/');u.searchParams.set('route_callsign',callsign);u.searchParams.set('lat',a.lat);u.searchParams.set('lon',a.lon);
+      const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('mode','route');u.searchParams.set('callsign',callsign);u.searchParams.set('lat',a.lat);u.searchParams.set('lon',a.lon);
       const r=await fetch(u,{cache:'no-store',signal:controller.signal});
       if(!r.ok)return null; const d=await r.json(); const x=Array.isArray(d)?d[0]:(Array.isArray(d?.routes)?d.routes[0]:null);
       const airports=x?._airports||[]; const valid=!!(x&&x.plausible===true&&airports.length>=2);
@@ -121,7 +121,7 @@ function queryForCurrentMap(){
   const radius=Math.min(250,Math.max(10,Math.ceil((maxM/1852)*1.12)));
   return {lat:c.lat,lon:c.lng,radius};
 }
-async function fetchProxy(signal,query){const u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/');u.searchParams.set('lat',query.lat.toFixed(4));u.searchParams.set('lon',query.lon.toFixed(4));u.searchParams.set('radius',String(query.radius));const r=await fetch(u,{cache:'no-store',signal});if(!r.ok)throw Error('Flight Tracker API '+r.status);const d=await r.json();return(d.ac||[]).map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}
+async function fetchProxy(signal,query){const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('lat',query.lat.toFixed(4));u.searchParams.set('lon',query.lon.toFixed(4));u.searchParams.set('radius',String(query.radius));const r=await fetch(u,{cache:'no-store',signal});if(!r.ok)throw Error('Flight Tracker API '+r.status);const d=await r.json();return(d.ac||[]).map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}
 async function load(force=false){
   if(mapInteraction&&!force)return;
   if(!force&&Date.now()-lastLoad<4000)return;
@@ -165,23 +165,26 @@ async function globalSearch(){
   if(ranked.length){selectSearchResult(ranked[0].a,q);return}
   showSearchMsg('Suche weltweit…');
   try{
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
-    const compact=q.replace(/\s+/g,'');
-    const attempts=/^[0-9A-F]{6}$/.test(compact)?[['icao',compact]]:/^[A-Z0-9]{1,3}-[A-Z0-9-]{1,10}$/.test(compact)?[['reg',compact],['callsign',compact]]:[['callsign',compact],['reg',compact]];
-    let d=null,raw=[];
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+    const base='https://gregorflighttracker.val.run/';
+    const tries=[];
+    const compact=q.replace(/[^A-Z0-9]/g,'');
+    if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase()]);
+    if(q.includes('-'))tries.push(['reg',q]);
+    else { tries.push(['callsign',q]); tries.push(['reg',q]); }
+    let list=[];
     try{
-      for(const [kind,value] of attempts){
-        const u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/');u.searchParams.set(kind,value);
+      for(const [kind,value] of tries){
+        const u=new URL(base);u.searchParams.set(kind,value);
         const r=await fetch(u,{cache:'no-store',signal:controller.signal});
-        let x=null;try{x=await r.json()}catch(_){}
-        d=x;
-        if(r.ok&&!x?.ft_upstream_failed){raw=(x?.ac||x?.aircraft||[]);if(raw.length)break}
+        if(!r.ok)continue;
+        const d=await r.json();
+        const raw=(d.ac||d.aircraft||[]);
+        list=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
+        if(list.length)break;
       }
     }finally{clearTimeout(timer)}
-    if(d?.ft_upstream_failed){showSearchMsg('Globaler Suchdienst derzeit nicht erreichbar. Bitte später erneut versuchen.');return}
-    
-    const list=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
-    if(!list.length){const diag=d?(' '+(d.ft_match||'Suche')+': '+(d.ft_upstream_status??'?')+'/'+(d.ft_upstream_count??0)):'';showSearchMsg('Kein aktuelles Live-Signal für „'+q+'“.'+diag);return}
+    if(!list.length){showSearchMsg('Kein aktuelles Live-Signal für „'+q+'“ gefunden.');return}
     const best=list.map(a=>({a,score:scoreSearch(a,q)})).sort((x,y)=>y.score-x.score)[0]?.a||list[0];
     selectSearchResult(best,q);
   }catch(e){console.warn('Global search',e);showSearchMsg('Globale Suche momentan nicht erreichbar.')}

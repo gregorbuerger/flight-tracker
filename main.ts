@@ -4,86 +4,138 @@ const cors = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-function out(body: unknown, status = 200) {
+function json(body: unknown, status = 200, cache = "no-store") {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" },
+    headers: { ...cors, "Content-Type": "application/json; charset=utf-8", "Cache-Control": cache },
   });
 }
 
-async function fetchJson(url: string, init: RequestInit = {}) {
-  const r = await fetch(url, { ...init, headers: { Accept: "application/json", ...(init.headers || {}) } });
-  if (!r.ok) throw new Error(`${r.status}`);
-  return await r.json();
+async function upstream(url: string, init: RequestInit = {}) {
+  const r = await fetch(url, {
+    ...init,
+    headers: { Accept: "application/json", ...(init.headers || {}) },
+  });
+  const text = await r.text();
+  let data: any = null;
+  try { data = JSON.parse(text); } catch (_) {}
+  if (!r.ok) {
+    return { ok: false, status: r.status, data, text: text.slice(0, 300) };
+  }
+  return { ok: true, status: r.status, data };
+}
+
+function aircraftArray(data: any): any[] {
+  if (Array.isArray(data?.ac)) return data.ac;
+  if (Array.isArray(data?.aircraft)) return data.aircraft;
+  return [];
 }
 
 export default async function (req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-  if (req.method !== "GET") return out({ error: "Method not allowed" }, 405);
-  try {
-    const u = new URL(req.url);
+  if (req.method !== "GET") return json({ error: "Method not allowed", ft_relay_version: "2.7-relay" }, 405);
 
-    // Val Town's public web URL reliably forwards requests on the root URL.
-    // Therefore all Flight Tracker actions use distinct ROOT query parameters;
-    // no sub-path routing and no generic mode/q parameters are required.
+  const u = new URL(req.url);
+
+  try {
+    // Explicit global searches on the already-working Val root URL.
     const reg = (u.searchParams.get("reg") || "").trim().toUpperCase();
     const callsign = (u.searchParams.get("callsign") || "").trim().toUpperCase();
-    const icao = (u.searchParams.get("icao") || "").trim().toUpperCase();
-    const searchValue = reg || callsign || icao;
+    const icao = (u.searchParams.get("icao") || "").trim().toLowerCase();
 
-    if (searchValue) {
-      if (searchValue.length > 24) return out({ error: "Invalid search" }, 400);
-      let kind = "registration";
-      let endpoint = "reg";
-      if (icao) { kind = "icao"; endpoint = "icao"; }
-      else if (callsign) { kind = "callsign"; endpoint = "callsign"; }
-      const upstream = `https://api.adsb.lol/v2/${endpoint}/${encodeURIComponent(searchValue)}`;
-      try {
-        const r = await fetch(upstream, { headers: { Accept: "application/json" } });
-        let d: any = null;
-        try { d = await r.json(); } catch (_) {}
-        const ac = d?.ac || d?.aircraft || [];
-        return out({
-          ac: Array.isArray(ac) ? ac : [],
-          ft_relay_version: "2.6",
+    if (reg || callsign || icao) {
+      let kind = "";
+      let query = "";
+      let url = "";
+
+      if (reg) {
+        kind = "registration";
+        query = reg;
+        url = `https://api.adsb.lol/v2/reg/${encodeURIComponent(reg)}`;
+      } else if (icao) {
+        kind = "icao";
+        query = icao;
+        url = `https://api.adsb.lol/v2/icao/${encodeURIComponent(icao)}`;
+      } else {
+        kind = "callsign";
+        query = callsign;
+        url = `https://api.adsb.lol/v2/callsign/${encodeURIComponent(callsign)}`;
+      }
+
+      const r = await upstream(url);
+      if (!r.ok) {
+        return json({
+          ac: [],
+          ft_relay_version: "2.7-relay",
           ft_mode: "search",
-          ft_search: searchValue,
           ft_match: kind,
+          ft_query: query,
           ft_upstream_status: r.status,
-          ft_upstream_count: Array.isArray(ac) ? ac.length : 0,
-          ft_upstream_failed: !r.ok,
-        }, r.ok ? 200 : 502);
-      } catch (err) {
-        return out({
-          ac: [], ft_relay_version: "2.6", ft_mode: "search",
-          ft_search: searchValue, ft_match: kind,
-          ft_upstream_status: 0, ft_upstream_count: 0,
-          ft_upstream_failed: true, error: String(err),
+          ft_upstream_error: r.text || r.data || "upstream error",
         }, 502);
       }
+
+      const ac = aircraftArray(r.data);
+      return json({
+        ac,
+        total: ac.length,
+        ft_relay_version: "2.7-relay",
+        ft_mode: "search",
+        ft_match: kind,
+        ft_query: query,
+        ft_upstream_status: r.status,
+      });
     }
 
-    const routeCallsign = (u.searchParams.get("route_callsign") || "").trim().toUpperCase();
-    if (routeCallsign) {
-      const lat = Number(u.searchParams.get("lat")), lon = Number(u.searchParams.get("lon"));
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return out({ error: "Invalid route query" }, 400);
-      const d = await fetchJson("https://adsb.im/api/0/routeset", {
+    // Route lookup, also on the root URL: ?route=CALLSIGN&lat=...&lon=...
+    const route = (u.searchParams.get("route") || "").trim().toUpperCase();
+    if (route) {
+      const lat = Number(u.searchParams.get("lat"));
+      const lon = Number(u.searchParams.get("lon"));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        return json({ error: "route requires lat and lon", ft_relay_version: "2.7-relay" }, 400);
+      }
+      const r = await upstream("https://adsb.im/api/0/routeset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planes: [{ callsign: routeCallsign, lat, lng: lon }] }),
+        body: JSON.stringify({ planes: [{ callsign: route, lat, lng: lon }] }),
       });
-      return out({ ...d, ft_relay_version: "2.6", ft_mode: "route" });
+      if (!r.ok) {
+        return json({ error: "route upstream failed", ft_relay_version: "2.7-relay", ft_upstream_status: r.status }, 502);
+      }
+      return json({ ...r.data, ft_relay_version: "2.7-relay", ft_mode: "route" });
     }
 
-    const lat = Number(u.searchParams.get("lat")), lon = Number(u.searchParams.get("lon"));
+    // Existing map query: ?lat=...&lon=...&radius=...
+    const lat = Number(u.searchParams.get("lat"));
+    const lon = Number(u.searchParams.get("lon"));
     const radius = Math.min(Math.max(Number(u.searchParams.get("radius")) || 100, 1), 250);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-      return out({ error: "Bitte lat und lon angeben.", ft_relay_version: "2.6" }, 400);
+      return json({
+        error: "Bitte lat und lon angeben oder reg/callsign/icao verwenden.",
+        ft_relay_version: "2.7-relay",
+      }, 400);
     }
-    const d = await fetchJson(`https://api.adsb.lol/v2/point/${lat}/${lon}/${radius}`);
-    d.ft_relay_version = "2.6"; d.ft_mode = "point";
-    return new Response(JSON.stringify(d), { status: 200, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "public, max-age=10" } });
-  } catch (e) {
-    return out({ error: "Flight-Tracker-Relayfehler", ft_relay_version: "2.6" }, 502);
+
+    const r = await upstream(`https://api.adsb.lol/v2/point/${lat}/${lon}/${radius}`);
+    if (!r.ok) {
+      return json({
+        error: "ADS-B upstream failed",
+        ft_relay_version: "2.7-relay",
+        ft_mode: "point",
+        ft_upstream_status: r.status,
+      }, 502);
+    }
+
+    const data = r.data || {};
+    data.ft_relay_version = "2.7-relay";
+    data.ft_mode = "point";
+    return json(data, 200, "public, max-age=10");
+  } catch (err) {
+    return json({
+      error: "Flight-Tracker-Relayfehler",
+      detail: String(err),
+      ft_relay_version: "2.7-relay",
+    }, 502);
   }
 }
