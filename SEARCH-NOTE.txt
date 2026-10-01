@@ -1,1 +1,1 @@
-v2.2: Global search uses Val Town relay only. Relay returns diagnostics for upstream HTTP errors versus genuine zero-result searches. Airline flight numbers may differ from broadcast ADS-B callsigns.
+v2.4 globale Suche: Relay-Pfad /search/<Kennzeichen|Callsign|ICAO>. Direkter Test z.B. https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/search/9H-QBA

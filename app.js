@@ -166,7 +166,7 @@ async function globalSearch(){
   showSearchMsg('Suche weltweit…');
   try{
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),9000);
-    const u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/');u.searchParams.set('mode','search');u.searchParams.set('q',q);
+    const u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/search/'+encodeURIComponent(q));
     let r;try{r=await fetch(u,{cache:'no-store',signal:controller.signal})}finally{clearTimeout(timer)}
     if(!r.ok)throw Error('Suche '+r.status);
     const d=await r.json();

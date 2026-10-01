@@ -64,3 +64,10 @@ footer{bottom:max(5px,calc(var(--safe-bottom) + 3px));max-width:calc(100vw - 110
   #searchBar{top:max(74px,calc(var(--safe-top) + 66px))}
   .searchMsg,.notice{top:max(124px,calc(var(--safe-top) + 116px))}
 }
+
+/* v2.4: standalone PWA uses the full physical viewport; Safari keeps dvh fallback above. */
+@media (display-mode: standalone) {
+  html,body{height:100vh!important;min-height:100vh!important;max-height:none!important;}
+  #map{height:100vh!important;min-height:100vh!important;max-height:none!important;bottom:0!important;}
+  footer{bottom:max(5px,calc(env(safe-area-inset-bottom) + 3px))!important;}
+}

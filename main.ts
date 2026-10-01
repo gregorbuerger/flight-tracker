@@ -22,10 +22,12 @@ export default async function (req: Request): Promise<Response> {
   if (req.method !== "GET") return out({ error: "Method not allowed" }, 405);
   try {
     const u = new URL(req.url);
-    const mode = (u.searchParams.get("mode") || "point").toLowerCase();
+    const parts = u.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    const pathMode = (parts[0] || "").toLowerCase();
+    const mode = pathMode === "search" || pathMode === "route" ? pathMode : (u.searchParams.get("mode") || "point").toLowerCase();
 
     if (mode === "search") {
-      const q = (u.searchParams.get("q") || "").trim().toUpperCase();
+      const q = ((parts[1] || u.searchParams.get("q") || "")).trim().toUpperCase();
       if (!q || q.length > 24) return out({ error: "Invalid search" }, 400);
       const compact = q.replace(/\s+/g, "");
       const e = encodeURIComponent(compact);
