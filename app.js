@@ -104,7 +104,19 @@ function craftKind(a){const d=(a.description||'').toUpperCase(),t=(a.aircraftTyp
 function iconPx(){const z=map.getZoom();return z<=8?20:z<=10?23:z<=12?26:29}
 function craftIcon(a,selected=false){const kind=craftKind(a),svg=kind==='heli'?svgHeli:kind==='light'?svgLight:svgPlane,px=iconPx();return L.divIcon({className:'craft-marker',html:`<div class="craft ${kind}${selected?' selected':''}" style="--craft-size:${px}px;transform:rotate(${a.track||0}deg)">${svg}</div>`,iconSize:[px,px],iconAnchor:[px/2,px/2]})}
 function refreshMarkerStyles(){for(const [hex,obj] of markerByHex){const isSelected=normHex(hex)===normHex(selectedHex);obj.marker.setIcon(craftIcon(obj.aircraft,isSelected));obj.marker.setZIndexOffset(isSelected?2000:0);if(isSelected&&obj.marker.bringToFront)obj.marker.bringToFront()}}
-function keepSelectedVisible(a,animate=false){if(!a||a.lat==null||a.lon==null)return;const p=map.latLngToContainerPoint([a.lat,a.lon]);const sheetH=sheet.classList.contains('hidden')?0:sheet.getBoundingClientRect().height;const top=92,bottom=window.innerHeight-sheetH-18;const targetY=top+(bottom-top)*.48;if(p.y<top||p.y>bottom||animate){const delta=p.y-targetY;const centerPoint=map.latLngToContainerPoint(map.getCenter());const newCenter=map.containerPointToLatLng([centerPoint.x,centerPoint.y+delta]);map.panTo(newCenter,{animate})}}
+function keepSelectedVisible(a,animate=false){
+  if(!a||a.lat==null||a.lon==null)return;
+  const mapRect=document.querySelector('#map').getBoundingClientRect();
+  const searchRect=document.querySelector('#searchBar').getBoundingClientRect();
+  const sheetVisible=!sheet.classList.contains('hidden');
+  const sheetRect=sheetVisible?sheet.getBoundingClientRect():null;
+  const top=Math.max(searchRect.bottom+12,mapRect.top+90);
+  const bottom=sheetVisible?Math.max(top+80,sheetRect.top-14):mapRect.bottom-50;
+  const targetY=top+(bottom-top)*0.48;
+  const p=map.latLngToContainerPoint([a.lat,a.lon]);
+  const deltaY=p.y-targetY;
+  if(Math.abs(deltaY)>4||animate){map.panBy([0,deltaY],{animate,duration:animate?.28:0});}
+}
 function animateMarker(obj,a){
   if(obj.animFrame)cancelAnimationFrame(obj.animFrame);
   const from=obj.marker.getLatLng(),to=L.latLng(a.lat,a.lon);
@@ -156,15 +168,18 @@ function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hi
 function searchTokens(a){return[(a.flight||''),(a.registration||''),(a.hex||''),(a.aircraftType||'')].map(x=>String(x).trim().toUpperCase())}
 function scoreSearch(a,q){const t=searchTokens(a);let score=0;for(const v of t){if(!v)continue;if(v===q)score=Math.max(score,100);else if(v.replace(/[-\s]/g,'')===q.replace(/[-\s]/g,''))score=Math.max(score,95);else if(v.startsWith(q))score=Math.max(score,70);else if(v.includes(q))score=Math.max(score,50)}return score}
 function selectSearchResult(found,q){
-  // Show the global hit immediately instead of waiting for the area refresh.
   const key=normHex(found.hex)||`${found.lat}:${found.lon}:${found.flight}`;
   const existing=lastGood.filter(a=>(normHex(a.hex)||`${a.lat}:${a.lon}:${a.flight}`)!==key);
   lastGood=[found,...existing];
   draw(lastGood);
   mapInteraction=true;
-  map.setView([found.lat,found.lon],Math.max(map.getZoom(),9),{animate:true});
+  // Global search is a hard synchronization point: marker and map start at the same live coordinates.
+  const obj=markerByHex.get(key);
+  if(obj){if(obj.animFrame)cancelAnimationFrame(obj.animFrame);obj.animFrame=null;obj.marker.setLatLng([found.lat,found.lon]);}
+  map.setView([found.lat,found.lon],Math.max(map.getZoom(),9),{animate:false});
   center=[found.lat,found.lon];
   selectAircraft(found);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>keepSelectedVisible(found,false)));
   updateStatus();
   showSearchMsg('Gefunden: '+(found.flight||found.registration||found.hex));
   clearTimeout(mapReloadTimer);
@@ -174,7 +189,7 @@ function selectSearchResult(found,q){
     statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';
     nextRefreshAt=Date.now()+REFRESH_MS;
     load(true);
-  },550);
+  },700);
 }
 function looksLikeAirlineFlightNumber(q){
   return /^[A-Z]{2}\d{1,4}[A-Z]?$/.test(q)||/^[A-Z]{2,3}\d{2,4}$/.test(q);
@@ -220,5 +235,16 @@ document.querySelector('#searchBtn').onclick=globalSearch;searchInput.addEventLi
 function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';setTimeout(()=>load(true),250)}
 function locate(){if(!navigator.geolocation){statusEl.textContent='Standort wird von diesem Browser nicht unterstützt';return}if(!lastGood.length)statusEl.textContent='Standort wird gesucht…';navigator.geolocation.getCurrentPosition(setLocation,e=>{const msg=e.code===1?'Standortzugriff nicht erlaubt':e.code===2?'Standort nicht verfügbar':'Standortsuche dauerte zu lange';statusEl.textContent=msg;notice.textContent=msg+'. Du kannst die Karte trotzdem verschieben und Live-Daten laden.';notice.classList.remove('hiddenNotice');load(true)},{enableHighAccuracy:true,timeout:12000,maximumAge:30000})}
 document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true);map.on('movestart zoomstart',()=>{mapInteraction=true;clearTimeout(mapReloadTimer);if(activeController)activeController.abort()});map.on('moveend',scheduleMapReload);map.on('zoomend',()=>{refreshMarkerStyles();scheduleMapReload()});
-if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').then(r=>r.update()).catch(()=>{});
+if('serviceWorker'in navigator){
+  let refreshing=false;
+  const banner=document.querySelector('#updateBanner'),nowBtn=document.querySelector('#updateNow'),laterBtn=document.querySelector('#updateLater');
+  const showUpdate=reg=>{if(!reg?.waiting)return;banner.classList.remove('hiddenUpdate');nowBtn.onclick=()=>{nowBtn.disabled=true;nowBtn.textContent='Aktualisiere…';reg.waiting.postMessage({type:'SKIP_WAITING'})};laterBtn.onclick=()=>banner.classList.add('hiddenUpdate')};
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(refreshing)return;refreshing=true;location.reload()});
+  navigator.serviceWorker.register('./sw.js?v=30').then(reg=>{
+    if(reg.waiting)showUpdate(reg);
+    reg.addEventListener('updatefound',()=>{const w=reg.installing;if(!w)return;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)showUpdate(reg)})});
+    reg.update();
+    setInterval(()=>reg.update().catch(()=>{}),10*60*1000);
+  }).catch(()=>{});
+}
 setTimeout(locate,500);setInterval(()=>{if(document.visibilityState==='visible'&&!loading&&Date.now()>=nextRefreshAt)load()},250);setInterval(()=>{if(lastGood.length&&!loading)updateStatus();const left=Math.max(0,nextRefreshAt-Date.now());const sec=Math.max(0,Math.ceil(left/1000));countdownEl.textContent=sec||'0';refreshRing.style.setProperty('--p',`${Math.min(360,Math.max(0,(1-left/REFRESH_MS)*360))}deg`)},200);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){nextRefreshAt=Date.now();load(true)}});
