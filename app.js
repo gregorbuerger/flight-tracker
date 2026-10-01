@@ -155,39 +155,65 @@ function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hi
 function searchTokens(a){return[(a.flight||''),(a.registration||''),(a.hex||''),(a.aircraftType||'')].map(x=>String(x).trim().toUpperCase())}
 function scoreSearch(a,q){const t=searchTokens(a);let score=0;for(const v of t){if(!v)continue;if(v===q)score=Math.max(score,100);else if(v.replace(/[-\s]/g,'')===q.replace(/[-\s]/g,''))score=Math.max(score,95);else if(v.startsWith(q))score=Math.max(score,70);else if(v.includes(q))score=Math.max(score,50)}return score}
 function selectSearchResult(found,q){
-  mapInteraction=true;map.setView([found.lat,found.lon],Math.max(map.getZoom(),9),{animate:true});center=[found.lat,found.lon];
-  selectAircraft(found);showSearchMsg('Gefunden: '+(found.flight||found.registration||found.hex));
-  setTimeout(()=>{mapInteraction=false;load(true)},900);
+  // Show the global hit immediately instead of waiting for the area refresh.
+  const key=found.hex||`${found.lat}:${found.lon}:${found.flight}`;
+  const existing=lastGood.filter(a=>(a.hex||`${a.lat}:${a.lon}:${a.flight}`)!==key);
+  lastGood=[found,...existing];
+  draw(lastGood);
+  mapInteraction=true;
+  map.setView([found.lat,found.lon],Math.max(map.getZoom(),9),{animate:true});
+  center=[found.lat,found.lon];
+  selectAircraft(found);
+  updateStatus();
+  showSearchMsg('Gefunden: '+(found.flight||found.registration||found.hex));
+  clearTimeout(mapReloadTimer);
+  mapReloadTimer=setTimeout(()=>{
+    mapInteraction=false;
+    const c=map.getCenter();center=[c.lat,c.lng];
+    statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';
+    nextRefreshAt=Date.now()+REFRESH_MS;
+    load(true);
+  },550);
+}
+function looksLikeAirlineFlightNumber(q){
+  return /^[A-Z]{2}\d{1,4}[A-Z]?$/.test(q)||/^[A-Z]{2,3}\d{2,4}$/.test(q);
 }
 async function globalSearch(){
   const q=searchInput.value.trim().toUpperCase();if(!q)return;
   const ranked=lastGood.map(a=>({a,score:scoreSearch(a,q)})).filter(x=>x.score>0).sort((x,y)=>y.score-x.score);
   if(ranked.length){selectSearchResult(ranked[0].a,q);return}
   showSearchMsg('Suche weltweit…');
-  try{
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
-    const base='https://gregorflighttracker.val.run/';
-    const tries=[];
-    const compact=q.replace(/[^A-Z0-9]/g,'');
-    if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase()]);
-    if(q.includes('-'))tries.push(['reg',q]);
-    else { tries.push(['callsign',q]); tries.push(['reg',q]); }
-    let list=[];
+  const compact=q.replace(/[^A-Z0-9]/g,'');
+  const tries=[];
+  if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase()]);
+  if(q.includes('-'))tries.push(['reg',q]);
+  else {tries.push(['callsign',q]);tries.push(['reg',q]);}
+  let list=[],technicalErrors=0,successfulLookups=0;
+  for(const [kind,value] of tries){
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),7000);
     try{
-      for(const [kind,value] of tries){
-        const u=new URL(base);u.searchParams.set(kind,value);
-        const r=await fetch(u,{cache:'no-store',signal:controller.signal});
-        if(!r.ok)continue;
-        const d=await r.json();
-        const raw=(d.ac||d.aircraft||[]);
-        list=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
-        if(list.length)break;
-      }
-    }finally{clearTimeout(timer)}
-    if(!list.length){showSearchMsg('Kein aktuelles Live-Signal für „'+q+'“ gefunden.');return}
+      const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set(kind,value);
+      const r=await fetch(u,{cache:'no-store',signal:controller.signal});
+      if(!r.ok){technicalErrors++;continue}
+      const d=await r.json();
+      if(d?.error){technicalErrors++;continue}
+      successfulLookups++;
+      const raw=(d.ac||d.aircraft||[]);
+      list=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
+      if(list.length)break;
+    }catch(e){console.warn('Global search '+kind,e);technicalErrors++}
+    finally{clearTimeout(timer)}
+  }
+  if(list.length){
     const best=list.map(a=>({a,score:scoreSearch(a,q)})).sort((x,y)=>y.score-x.score)[0]?.a||list[0];
-    selectSearchResult(best,q);
-  }catch(e){console.warn('Global search',e);showSearchMsg('Globale Suche momentan nicht erreichbar.')}
+    selectSearchResult(best,q);return;
+  }
+  if(successfulLookups>0){
+    if(looksLikeAirlineFlightNumber(q))showSearchMsg('„'+q+'“ wurde nicht als aktuelles ADS-B-Rufzeichen gefunden. Das kann eine Flugnummer sein; Flugnummer und ADS-B-Rufzeichen können verschieden sein.');
+    else showSearchMsg('Kein aktuelles Live-Signal für „'+q+'“ gefunden.');
+    return;
+  }
+  showSearchMsg(technicalErrors?'Globale Suche momentan technisch nicht erreichbar.':'Kein aktuelles Live-Signal für „'+q+'“ gefunden.');
 }
 document.querySelector('#searchBtn').onclick=globalSearch;searchInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();globalSearch();searchInput.blur()}});
 function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';setTimeout(()=>load(true),250)}
