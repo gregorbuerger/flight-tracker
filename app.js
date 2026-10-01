@@ -169,9 +169,11 @@ async function globalSearch(){
     const u=new URL('https://gregorbuerger--ddcc2c7abcfe11f182391607ee4eb77e.web.val.run/');u.searchParams.set('mode','search');u.searchParams.set('q',q);
     let r;try{r=await fetch(u,{cache:'no-store',signal:controller.signal})}finally{clearTimeout(timer)}
     if(!r.ok)throw Error('Suche '+r.status);
-    const d=await r.json(),raw=(d.ac||d.aircraft||[]);
+    const d=await r.json();
+    if(d.ft_upstream_failed){showSearchMsg('Globaler Suchdienst derzeit nicht erreichbar. Bitte später erneut versuchen.');return}
+    const raw=(d.ac||d.aircraft||[]);
     const list=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
-    if(!list.length){showSearchMsg('Aktuell kein passendes Flugzeug in den Live-Daten gefunden.');return}
+    if(!list.length){showSearchMsg('Kein aktuelles Live-Signal für „'+q+'“ gefunden. Flugnummer und ADS-B-Callsign können verschieden sein.');return}
     const best=list.map(a=>({a,score:scoreSearch(a,q)})).sort((x,y)=>y.score-x.score)[0]?.a||list[0];
     selectSearchResult(best,q);
   }catch(e){console.warn('Global search',e);showSearchMsg('Globale Suche momentan nicht erreichbar.')}

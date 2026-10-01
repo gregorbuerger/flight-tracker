@@ -1,6 +1,1 @@
-Flight Tracker v2.1
-
-Globale Suche laeuft ueber denselben Val-Town-Relay wie die Karten-Livedaten.
-Unterstuetzt werden ADS-B-Callsign, Registrierung/Kennzeichen und ICAO-Adresse.
-Bei Treffer springt die Karte automatisch zur aktuellen Position und waehlt das Flugzeug aus.
-Normale Airline-Flugnummern koennen vom ausgestrahlten Callsign abweichen und sind deshalb nicht in jedem Fall direkt auffindbar.
+v2.2: Global search uses Val Town relay only. Relay returns diagnostics for upstream HTTP errors versus genuine zero-result searches. Airline flight numbers may differ from broadcast ADS-B callsigns.

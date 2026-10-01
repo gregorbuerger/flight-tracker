@@ -27,21 +27,28 @@ export default async function (req: Request): Promise<Response> {
     if (mode === "search") {
       const q = (u.searchParams.get("q") || "").trim().toUpperCase();
       if (!q || q.length > 24) return out({ error: "Invalid search" }, 400);
-      const e = encodeURIComponent(q);
-      const urls: string[] = [];
-      if (/^[0-9A-F]{6}$/.test(q)) urls.push(`https://api.adsb.lol/v2/icao/${e}`);
-      if (/^[A-Z0-9]{1,3}-[A-Z0-9-]{1,10}$/.test(q)) urls.push(`https://api.adsb.lol/v2/reg/${e}`);
-      urls.push(`https://api.adsb.lol/v2/callsign/${e}`);
-      if (!urls.some(x => x.includes('/reg/'))) urls.push(`https://api.adsb.lol/v2/reg/${e}`);
-      if (!urls.some(x => x.includes('/icao/')) && /^[0-9A-F]+$/.test(q)) urls.push(`https://api.adsb.lol/v2/icao/${e}`);
-      for (const url of urls) {
+      const compact = q.replace(/\s+/g, "");
+      const e = encodeURIComponent(compact);
+      const attempts: { kind: string; url: string }[] = [];
+      if (/^[0-9A-F]{6}$/.test(compact)) attempts.push({ kind: "icao", url: `https://api.adsb.lol/v2/icao/${e}` });
+      if (/^[A-Z0-9]{1,3}-[A-Z0-9-]{1,10}$/.test(compact)) attempts.push({ kind: "registration", url: `https://api.adsb.lol/v2/reg/${e}` });
+      attempts.push({ kind: "callsign", url: `https://api.adsb.lol/v2/callsign/${e}` });
+      if (!attempts.some(x => x.kind === "registration")) attempts.push({ kind: "registration", url: `https://api.adsb.lol/v2/reg/${e}` });
+      const diagnostics: any[] = [];
+      for (const a of attempts) {
         try {
-          const d: any = await fetchJson(url);
+          const r = await fetch(a.url, { headers: { Accept: "application/json" } });
+          let d: any = null;
+          try { d = await r.json(); } catch (_) {}
           const ac = d?.ac || d?.aircraft || [];
-          if (Array.isArray(ac) && ac.length) return out({ ...d, ac, ft_search: q });
-        } catch (_) {}
+          diagnostics.push({ kind: a.kind, status: r.status, count: Array.isArray(ac) ? ac.length : 0 });
+          if (r.ok && Array.isArray(ac) && ac.length) return out({ ac, ft_search: q, ft_match: a.kind, ft_diagnostics: diagnostics });
+        } catch (err) {
+          diagnostics.push({ kind: a.kind, status: 0, count: 0, error: String(err) });
+        }
       }
-      return out({ ac: [], ft_search: q });
+      const upstreamFailed = diagnostics.length > 0 && diagnostics.every(x => x.status === 0 || x.status >= 400);
+      return out({ ac: [], ft_search: q, ft_diagnostics: diagnostics, ft_upstream_failed: upstreamFailed });
     }
 
     if (mode === "route") {
