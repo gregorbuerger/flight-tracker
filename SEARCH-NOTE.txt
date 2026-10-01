@@ -1,0 +1,7 @@
+Flight Tracker v2.0
+
+Die fehlerhafte direkte Browser-Suche aus v1.9 wurde entfernt.
+Die Suche arbeitet jetzt ausschliesslich mit Flugzeugen, die ueber denselben Val-Town-Livepfad wie die Karte geladen wurden.
+Damit gibt es keine zweite, konkurrierende Live-Datenimplementierung mehr.
+
+Wichtig: Eine echte weltweite Suche braucht eine Erweiterung des Val-Town-Relays um die adsb.lol-Suchendpunkte. Diese ist in v2.0 bewusst noch nicht vorgetaeuscht.

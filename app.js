@@ -150,23 +150,21 @@ function scheduleMapReload(){
   mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;load(true)},700);
 }
 const searchInput=document.querySelector('#flightSearch'),searchMsg=document.querySelector('#searchMsg');
-function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hiddenSearch');clearTimeout(showSearchMsg.t);showSearchMsg.t=setTimeout(()=>searchMsg.classList.add('hiddenSearch'),4500)}
-function normalizeLive(a){return {hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}}
+function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hiddenSearch');clearTimeout(showSearchMsg.t);showSearchMsg.t=setTimeout(()=>searchMsg.classList.add('hiddenSearch'),5200)}
+function searchTokens(a){return[(a.flight||''),(a.registration||''),(a.hex||''),(a.aircraftType||'')].map(x=>String(x).trim().toUpperCase())}
+function scoreSearch(a,q){const t=searchTokens(a);let score=0;for(const v of t){if(!v)continue;if(v===q)score=Math.max(score,100);else if(v.replace(/[-\s]/g,'')===q.replace(/[-\s]/g,''))score=Math.max(score,95);else if(v.startsWith(q))score=Math.max(score,70);else if(v.includes(q))score=Math.max(score,50)}return score}
+function selectSearchResult(found,q){
+  mapInteraction=true;map.setView([found.lat,found.lon],Math.max(map.getZoom(),9),{animate:true});center=[found.lat,found.lon];
+  selectAircraft(found);showSearchMsg('Gefunden: '+(found.flight||found.registration||found.hex));
+  setTimeout(()=>{mapInteraction=false;load(true)},900);
+}
 async function globalSearch(){
   const q=searchInput.value.trim().toUpperCase();if(!q)return;
-  showSearchMsg('Suche live nach '+q+' …');
-  const compact=q.replace(/\s+/g,'');
-  const endpoints=[];
-  if(/^[A-F0-9]{6}$/.test(compact))endpoints.push('icao/'+compact);
-  if(/^[A-Z]{1,2}-?[A-Z0-9]{2,5}$/.test(compact)||compact.includes('-'))endpoints.push('reg/'+encodeURIComponent(compact));
-  endpoints.push('callsign/'+encodeURIComponent(compact));
-  let found=null;
-  for(const ep of [...new Set(endpoints)]){try{const r=await fetch('https://api.adsb.lol/v2/'+ep,{cache:'no-store'});if(!r.ok)continue;const d=await r.json();const a=(d.ac||[]).find(x=>x.lat!=null&&x.lon!=null);if(a){found=normalizeLive(a);break}}catch(e){console.warn('Search',e)}}
-  if(!found){showSearchMsg('Kein aktuell empfangenes Flugzeug für „'+q+'“ gefunden.');return}
-  mapInteraction=true;map.setView([found.lat,found.lon],Math.max(map.getZoom(),9),{animate:true});center=[found.lat,found.lon];
-  // make the live result immediately selectable, then refresh the surrounding map
-  lastGood=[found,...lastGood.filter(x=>x.hex!==found.hex)];draw(lastGood);selectAircraft(found);showSearchMsg('Gefunden: '+(found.flight||found.registration||found.hex));
-  setTimeout(()=>{mapInteraction=false;load(true)},900);
+  // v2.0: one authoritative live-data path only. Search the aircraft actually delivered by our Val Town relay.
+  // This avoids the broken direct-browser adsb.lol path from v1.9.
+  const ranked=lastGood.map(a=>({a,score:scoreSearch(a,q)})).filter(x=>x.score>0).sort((x,y)=>y.score-x.score);
+  if(ranked.length){selectSearchResult(ranked[0].a,q);return}
+  showSearchMsg('Nicht im aktuell geladenen Live-Gebiet gefunden. Verschiebe die Karte in die Region und suche erneut.');
 }
 document.querySelector('#searchBtn').onclick=globalSearch;searchInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();globalSearch();searchInput.blur()}});
 function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';setTimeout(()=>load(true),250)}
