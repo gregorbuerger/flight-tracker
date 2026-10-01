@@ -18,6 +18,24 @@ function updateStatus(){if(lastGood.length)statusEl.textContent=`${lastGood.leng
 const airlines={RYR:'Ryanair',DLH:'Lufthansa',AIC:'Air India',LOT:'LOT Polish Airlines',EWG:'Eurowings',EZY:'easyJet',SWR:'SWISS',AUA:'Austrian Airlines',BAW:'British Airways',KLM:'KLM',AFR:'Air France',THY:'Turkish Airlines',UAE:'Emirates',QTR:'Qatar Airways',SAS:'SAS',IBE:'Iberia',VLG:'Vueling',WZZ:'Wizz Air',CFG:'Condor',TUI:'TUI fly',BEL:'Brussels Airlines'};
 function airlineName(a){const f=(a.flight||'').trim().toUpperCase(),m=f.match(/^([A-Z]{3})/);return m&&airlines[m[1]]?airlines[m[1]]:''}
 function airportLabel(x){if(!x)return'';return x.iata_code||x.icao_code||x.municipality||x.name||''}
+function flightKind(a,e={}){
+  const ac=e.aircraft||{},r=e.flightroute||{};
+  const flight=(a.flight||r.callsign_icao||r.callsign_iata||'').trim().toUpperCase();
+  const prefix=(flight.match(/^([A-Z]{3})/)||[])[1]||'';
+  const airline=(r.airline?.name||airlineName(a)||'').toUpperCase();
+  const owner=(ac.registered_owner||'').toUpperCase();
+  const text=[airline,owner,(a.description||'').toUpperCase()].join(' ');
+  const cargoPrefixes=new Set(['FDX','UPS','CLX','BOX','GTI','ABW','NCA','CKS','PAC','BCS','SRR','TAY','AHK','MNB']);
+  const passengerPrefixes=new Set(['RYR','DLH','AIC','LOT','EWG','EZY','SWR','AUA','BAW','KLM','AFR','THY','UAE','QTR','SAS','IBE','VLG','WZZ','CFG','TUI','BEL']);
+  const businessPrefixes=new Set(['NJE','VJT','EJM','LXJ']);
+  if(cargoPrefixes.has(prefix)||/FEDEX|UPS AIR|CARGOLUX|AIRBRIDGECARGO|NIPPON CARGO|POLAR AIR CARGO|SILK WAY|DHL/.test(text))return['📦','Frachtflug','cargo'];
+  if(/DRF|LUFTRETTUNG|AIR RESCUE|RETTUNG|MEDEVAC/.test(text))return['🚁','Rettungsflug','rescue'];
+  if(/POLIZEI|POLICE|BUNDESPOLIZEI/.test(text))return['🚓','Polizei / Behörde','authority'];
+  if(/MILITARY|AIR FORCE|LUFTWAFFE|ARMY|NAVY/.test(text))return['✈️','Militär','military'];
+  if(businessPrefixes.has(prefix)||/NETJETS|VISTAJET|EXECUTIVE JET|PRIVATE JET/.test(text))return['🛩️','Geschäftsflug','business'];
+  if(passengerPrefixes.has(prefix)||r.airline?.name)return['👥','Passagierflug','passenger'];
+  return null;
+}
 function enrichKey(a){return (a.hex||a.registration||'')+'|'+(a.flight||'')}
 async function enrichAircraft(a){
   const key=enrichKey(a); if(!key.replace('|',''))return null;
@@ -41,6 +59,7 @@ function fillDetails(a){
   const reg=ac.registration||a.registration||'';
   document.querySelector('#flight').textContent=flight; document.querySelector('#detailFlight').textContent=flight;
   document.querySelector('#airline').textContent=airline; document.querySelector('#detailAirline').textContent=airline;
+  const kind=flightKind(a,e); const kindText=kind?`${kind[0]} ${kind[1]}`:''; document.querySelector('#flightKind').textContent=kindText; document.querySelector('#flightKind').classList.toggle('hiddenKind',!kind); document.querySelector('#detailFlightKind').textContent=kindText; document.querySelector('#detailFlightKind').classList.toggle('hiddenKind',!kind);
   document.querySelector('#reg').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   document.querySelector('#detailType').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   const o=airportLabel(r.origin),d=airportLabel(r.destination);const routeText=o&&d?`${o} → ${d}`:o?`${o} → Ziel unbekannt`:'Route nicht verfügbar';
