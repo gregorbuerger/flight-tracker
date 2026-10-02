@@ -7,7 +7,11 @@ let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,m
 let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
 const REFRESH_MS=15000, MOVE_MS=14000;
-let nextRefreshAt=Date.now()+REFRESH_MS;const countdownEl=document.querySelector('#countdown'),refreshRing=document.querySelector('#refreshRing');
+let connectionReady=false,startRetryTimer=null,startRetryStep=0;
+let nextRefreshAt=0;const countdownEl=document.querySelector('#countdown'),refreshRing=document.querySelector('#refreshRing');
+function setConnectingUi(){countdownEl.textContent='↻';refreshRing.style.setProperty('--p','0deg');refreshRing.classList.add('loading')}
+function armNormalRefresh(){connectionReady=true;startRetryStep=0;if(startRetryTimer){clearTimeout(startRetryTimer);startRetryTimer=null}nextRefreshAt=Date.now()+REFRESH_MS;refreshRing.classList.remove('loading')}
+function scheduleStartupRetry(){if(connectionReady||searching)return;const delays=[2000,4000,8000];const delay=delays[Math.min(startRetryStep,delays.length-1)];startRetryStep++;if(startRetryTimer)clearTimeout(startRetryTimer);setConnectingUi();startRetryTimer=setTimeout(()=>{startRetryTimer=null;if(!connectionReady&&!searching)load(true)},delay)}
 const kmh=v=>v==null?'—':Math.round(v*3.6)+' km/h';
 const celsius=v=>v==null?'':Math.round(v)+' °C';
 const windText=(dir,spd)=>dir==null||spd==null?'':`${Math.round(spd*1.852)} km/h aus ${compassWord(dir)}`;
@@ -149,16 +153,16 @@ async function load(force=false){
   try{
     const list=await fetchProxy(controller.signal,query);
     if(seq!==requestSeq)return; // stale response from an older map area
-    latestAppliedSeq=seq;draw(list);
+    latestAppliedSeq=seq;draw(list);armNormalRefresh();
   }catch(e){
     if(e?.name==='AbortError'){return;}
     if(seq!==requestSeq)return;
     console.warn(e);failCount++;
-    if(lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}}
-    else{const delay=failCount===1?1800:failCount===2?4000:7000;statusEl.textContent=failCount<3?'Live-Verbindung wird aufgebaut…':'Live-Daten momentan nicht erreichbar';notice.textContent=failCount<3?'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…':'Die Live-Flugdaten antworten gerade nicht. Automatischer neuer Versuch läuft; tippe hier für sofort.';notice.classList.remove('hiddenNotice');setTimeout(()=>{if(!lastGood.length&&!searching)load(true)},delay)}
+    if(connectionReady||lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}nextRefreshAt=Date.now()+REFRESH_MS}
+    else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent='Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice');scheduleStartupRetry()}
   }finally{
     clearTimeout(timer);
-    if(seq===requestSeq){loading=false;activeController=null;refreshRing.classList.remove('loading');nextRefreshAt=Date.now()+REFRESH_MS}
+    if(seq===requestSeq){loading=false;activeController=null;if(connectionReady)refreshRing.classList.remove('loading');else setConnectingUi()}
   }
 }
 function scheduleMapReload(){
@@ -205,7 +209,7 @@ async function globalSearch(){
   document.querySelector('#searchBtn').disabled=true;
   // Suche hat Vorrang: einen laufenden Kartenrequest abbrechen und den Auto-Refresh pausieren.
   if(activeController){activeController.abort();activeController=null;loading=false;refreshRing.classList.remove('loading');requestSeq++}
-  clearTimeout(mapReloadTimer);nextRefreshAt=Date.now()+REFRESH_MS;
+  clearTimeout(mapReloadTimer);if(connectionReady)nextRefreshAt=Date.now()+REFRESH_MS;
   showSearchMsg('Suche weltweit…');
   const compact=q.replace(/[^A-Z0-9]/g,'');
   const tries=[];
@@ -269,4 +273,4 @@ if('serviceWorker'in navigator){
     setInterval(()=>reg.update().catch(()=>{}),10*60*1000);
   }).catch(()=>{});
 }
-setTimeout(locate,500);setInterval(()=>{if(document.visibilityState==='visible'&&!loading&&!searching&&Date.now()>=nextRefreshAt)load()},250);setInterval(()=>{if(lastGood.length&&!loading)updateStatus();const left=Math.max(0,nextRefreshAt-Date.now());const sec=Math.max(0,Math.ceil(left/1000));countdownEl.textContent=sec||'0';refreshRing.style.setProperty('--p',`${Math.min(360,Math.max(0,(1-left/REFRESH_MS)*360))}deg`)},200);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){nextRefreshAt=Date.now();if(!searching)load(true)}});
+setConnectingUi();setTimeout(locate,500);setInterval(()=>{if(connectionReady&&document.visibilityState==='visible'&&!loading&&!searching&&Date.now()>=nextRefreshAt)load()},250);setInterval(()=>{if(!connectionReady){setConnectingUi();return}if(lastGood.length&&!loading)updateStatus();const left=Math.max(0,nextRefreshAt-Date.now());const sec=Math.max(0,Math.ceil(left/1000));countdownEl.textContent=loading?'↻':(sec||'0');refreshRing.style.setProperty('--p',loading?'0deg':`${Math.min(360,Math.max(0,(1-left/REFRESH_MS)*360))}deg`)},200);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(connectionReady)nextRefreshAt=Date.now();if(!searching)load(true)}});
