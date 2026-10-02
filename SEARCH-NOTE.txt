@@ -1,1 +1,6 @@
-v2.5: Ein Relay-Codepfad (main.ts). Suche unterstuetzt Query (?mode=search&q=9H-QBA) und /search/9H-QBA. Antworten enthalten ft_relay_version und ft_mode zur Diagnose.
+v3.5 search behavior
+- Searches currently loaded live aircraft first.
+- Global lookup distinguishes registration, ICAO 24-bit address, and broadcast ADS-B callsign.
+- An airline flight number is not assumed to equal the broadcast callsign.
+- Search is live-only: aircraft no longer transmitting cannot be found through the live ADS-B endpoints.
+- Position-aware route lookup remains separate and only trusted when the route response is plausible.
