@@ -6,12 +6,13 @@ let markerByHex=new Map(),center=[48,10],locationMarker=null,accuracyCircle=null
 let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,mapReloadTimer=null;
 let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
-const REFRESH_MS=15000, MOVE_MS=14000;
+const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=5000;
+let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
 let connectionReady=false,startRetryTimer=null,startRetryStep=0;
 let nextRefreshAt=0;const countdownEl=document.querySelector('#countdown'),refreshRing=document.querySelector('#refreshRing');
 function setConnectingUi(){countdownEl.textContent='↻';refreshRing.style.setProperty('--p','0deg');refreshRing.classList.add('loading')}
 function armNormalRefresh(){connectionReady=true;startRetryStep=0;if(startRetryTimer){clearTimeout(startRetryTimer);startRetryTimer=null}nextRefreshAt=Date.now()+REFRESH_MS;refreshRing.classList.remove('loading')}
-function scheduleStartupRetry(){if(connectionReady||searching)return;const delays=[2000,4000,8000];const delay=delays[Math.min(startRetryStep,delays.length-1)];startRetryStep++;if(startRetryTimer)clearTimeout(startRetryTimer);setConnectingUi();startRetryTimer=setTimeout(()=>{startRetryTimer=null;if(!connectionReady&&!searching)load(true)},delay)}
+function scheduleStartupRetry(){if(connectionReady||searching)return;const delays=[1000,2000,3000];const delay=delays[Math.min(startRetryStep,delays.length-1)];startRetryStep++;if(startRetryTimer)clearTimeout(startRetryTimer);setConnectingUi();startRetryTimer=setTimeout(()=>{startRetryTimer=null;if(!connectionReady&&!searching)load(true)},delay)}
 const kmh=v=>v==null?'—':Math.round(v*3.6)+' km/h';
 const celsius=v=>v==null?'':Math.round(v)+' °C';
 const windText=(dir,spd)=>dir==null||spd==null?'':`${Math.round(spd*1.852)} km/h aus ${compassWord(dir)}`;
@@ -139,7 +140,7 @@ function queryForCurrentMap(){
   const radius=Math.min(250,Math.max(10,Math.ceil((maxM/1852)*1.12)));
   return {lat:c.lat,lon:c.lng,radius};
 }
-async function fetchProxy(signal,query){const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('lat',query.lat.toFixed(4));u.searchParams.set('lon',query.lon.toFixed(4));u.searchParams.set('radius',String(query.radius));const r=await fetch(u,{cache:'no-store',signal});if(!r.ok)throw Error('Flight Tracker API '+r.status);const d=await r.json();return(d.ac||[]).map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}
+async function fetchProxy(signal,query){const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('lat',query.lat.toFixed(4));u.searchParams.set('lon',query.lon.toFixed(4));u.searchParams.set('radius',String(query.radius));const started=performance.now();netDiag.attempt++;const r=await fetch(u,{cache:'no-store',signal});const ms=Math.round(performance.now()-started);netDiag.lastMs=ms;netDiag.lastAt=Date.now();if(!r.ok){netDiag.lastResult='HTTP '+r.status;throw Error('Flight Tracker API '+r.status)}const d=await r.json();netDiag.lastResult='OK';return(d.ac||[]).map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}
 async function load(force=false){
   if(searching)return;
   if(mapInteraction&&!force)return;
@@ -147,7 +148,7 @@ async function load(force=false){
   const seq=++requestSeq,query=queryForCurrentMap();
   if(activeController)activeController.abort();
   const controller=new AbortController(); activeController=controller;
-  const timer=setTimeout(()=>controller.abort(),12000);
+  let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort()},REQUEST_TIMEOUT_MS);
   loading=true;lastLoad=Date.now();refreshRing.classList.add('loading');
   if(!lastGood.length)statusEl.textContent='Live-Flugzeuge werden geladen…';
   try{
@@ -155,11 +156,12 @@ async function load(force=false){
     if(seq!==requestSeq)return; // stale response from an older map area
     latestAppliedSeq=seq;draw(list);armNormalRefresh();
   }catch(e){
-    if(e?.name==='AbortError'){return;}
+    if(e?.name==='AbortError'&&!timedOut){return;}
     if(seq!==requestSeq)return;
+    if(timedOut){netDiag.lastMs=REQUEST_TIMEOUT_MS;netDiag.lastResult='TIMEOUT';netDiag.lastAt=Date.now();}
     console.warn(e);failCount++;
     if(connectionReady||lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}nextRefreshAt=Date.now()+REFRESH_MS}
-    else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent='Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice');scheduleStartupRetry()}
+    else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent=timedOut?'Keine Antwort nach 5 Sek. · neuer Versuch folgt automatisch…':'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice');scheduleStartupRetry()}
   }finally{
     clearTimeout(timer);
     if(seq===requestSeq){loading=false;activeController=null;if(connectionReady)refreshRing.classList.remove('loading');else setConnectingUi()}
@@ -225,7 +227,7 @@ async function globalSearch(){
   try{
     for(const [kind,value] of tries){
       if(run!==searchRun)return;
-      const controller=new AbortController();searchController=controller;const timer=setTimeout(()=>controller.abort(),7000);
+      const controller=new AbortController();searchController=controller;let searchTimedOut=false;const timer=setTimeout(()=>{searchTimedOut=true;controller.abort()},REQUEST_TIMEOUT_MS);
       try{
         const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set(kind,value);
         const r=await fetch(u,{cache:'no-store',signal:controller.signal});
@@ -238,7 +240,7 @@ async function globalSearch(){
         const raw=(d.ac||d.aircraft||[]);
         list=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
         if(list.length)break;
-      }catch(e){if(e?.name!=='AbortError')console.warn('Global search '+kind,e);technicalErrors++}
+      }catch(e){if(e?.name!=='AbortError'||searchTimedOut)console.warn('Global search '+kind,e);technicalErrors++;if(searchTimedOut)netDiag.lastResult='SEARCH TIMEOUT'}
       finally{clearTimeout(timer);if(searchController===controller)searchController=null}
     }
     if(run!==searchRun)return;
