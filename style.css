@@ -83,3 +83,4 @@ footer{bottom:max(5px,calc(var(--safe-bottom) + 3px));max-width:calc(100vw - 110
 .diagEvent{color:#8fc7ff}.diagDetail{display:block;color:#8fa5bf;font-size:9px;margin-top:2px;white-space:normal;max-width:220px}
 
 .apPin{transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;padding:3px 8px;border-radius:9px;color:#fff;font:600 11px/1.15 -apple-system,system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.45);white-space:nowrap;pointer-events:none}.apPin b{font-size:9px;letter-spacing:.06em;text-transform:uppercase;opacity:.9}.apPin span{font-size:13px}.apStart{background:#1f9d4a}.apEnd{background:#1677ff}
+.routeBox span#routeNames{white-space:normal;font-size:11px;line-height:1.25}
