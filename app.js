@@ -11,7 +11,7 @@ let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
 let connectionReady=false,startRetryTimer=null,startRetryStep=0;
 let nextRefreshAt=0;const countdownEl=document.querySelector('#countdown'),refreshRing=document.querySelector('#refreshRing');
 function setConnectingUi(){countdownEl.textContent='↻';refreshRing.style.setProperty('--p','0deg');refreshRing.classList.add('loading')}
-function armNormalRefresh(){connectionReady=true;startRetryStep=0;if(startRetryTimer){clearTimeout(startRetryTimer);startRetryTimer=null}nextRefreshAt=Date.now()+REFRESH_MS;refreshRing.classList.remove('loading')}
+function armNormalRefresh(){connectionReady=true;startRetryStep=0;if(startRetryTimer){clearTimeout(startRetryTimer);startRetryTimer=null}refreshRing.classList.remove('loading')}
 function scheduleStartupRetry(){if(connectionReady||searching)return;const delays=[1000,2000,3000];const delay=delays[Math.min(startRetryStep,delays.length-1)];startRetryStep++;if(startRetryTimer)clearTimeout(startRetryTimer);setConnectingUi();startRetryTimer=setTimeout(()=>{startRetryTimer=null;if(!connectionReady&&!searching)load(true)},delay)}
 const kmh=v=>v==null?'—':Math.round(v*3.6)+' km/h';
 const celsius=v=>v==null?'':Math.round(v)+' °C';
@@ -149,7 +149,7 @@ async function load(force=false){
   if(activeController)activeController.abort();
   const controller=new AbortController(); activeController=controller;
   let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort()},REQUEST_TIMEOUT_MS);
-  loading=true;lastLoad=Date.now();refreshRing.classList.add('loading');
+  loading=true;lastLoad=Date.now();nextRefreshAt=lastLoad+REFRESH_MS;refreshRing.classList.add('loading');
   if(!lastGood.length)statusEl.textContent='Live-Flugzeuge werden geladen…';
   try{
     const list=await fetchProxy(controller.signal,query);
@@ -160,7 +160,7 @@ async function load(force=false){
     if(seq!==requestSeq)return;
     if(timedOut){netDiag.lastMs=REQUEST_TIMEOUT_MS;netDiag.lastResult='TIMEOUT';netDiag.lastAt=Date.now();}
     console.warn(e);failCount++;
-    if(connectionReady||lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}nextRefreshAt=Date.now()+REFRESH_MS}
+    if(connectionReady||lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}}
     else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent=timedOut?'Keine Antwort nach 5 Sek. · neuer Versuch folgt automatisch…':'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice');scheduleStartupRetry()}
   }finally{
     clearTimeout(timer);

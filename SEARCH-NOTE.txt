@@ -1,4 +1,4 @@
-v3.5 search behavior
+v3.6 search behavior
 - Searches currently loaded live aircraft first.
 - Global lookup distinguishes registration, ICAO 24-bit address, and broadcast ADS-B callsign.
 - An airline flight number is not assumed to equal the broadcast callsign.
