@@ -1,4 +1,4 @@
-const C='flight-tracker-v4.0';
+const C='flight-tracker-v4.2';
 const CORE=['./','./index.html','./style.css?v=38','./app.js?v=38','./manifest.json?v=38','./icon-192.png','./icon-512.png','./apple-touch-icon.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(CORE)))});
 self.addEventListener('message',e=>{if(e.data&&e.data.type==='SKIP_WAITING')self.skipWaiting()});

@@ -9,7 +9,7 @@ const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePe
 const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=4000, RETRY_DELAY_MS=1500;
 let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
 let pendingLoad=false,pendingLoadForce=false,retryTimer=null,retryUsed=false;
-const DIAG_KEY='flight-tracker-diag-v40';let diagLog=[];try{diagLog=JSON.parse(localStorage.getItem(DIAG_KEY)||'[]')}catch(_){diagLog=[]}let lastDiagSuccessAt=0;
+const DIAG_KEY='flight-tracker-diag-v41';let diagLog=[];try{diagLog=JSON.parse(localStorage.getItem(DIAG_KEY)||'[]')}catch(_){diagLog=[]}let lastDiagSuccessAt=0;
 function saveDiag(){try{localStorage.setItem(DIAG_KEY,JSON.stringify(diagLog.slice(-30)))}catch(_){}}
 function addDiag(x){diagLog.push(x);if(diagLog.length>60)diagLog=diagLog.slice(-60);saveDiag();renderDiag()}
 function diagEvent(result,detail=''){addDiag({at:Date.now(),ok:true,event:true,result,detail,totalMs:null,upstreamMs:null,gapMs:null,count:null})}
@@ -20,7 +20,7 @@ function buildDiagText(){
   const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
   const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
   const lines=[
-    'Flight Tracker v4.0 - Live-Diagnose',
+    'Flight Tracker v4.2 - Live-Diagnose',
     `Export: ${new Date().toLocaleString('de-DE')}`,
     `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
     `Erfolg/Fehler: ${ok}/${bad}`,
@@ -224,7 +224,7 @@ async function load(force=false,reason='scheduler'){
 }
 function scheduleMapReload(){
   clearTimeout(mapReloadTimer);
-  mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;load(true,'Kartenbereich geändert')},700);
+  mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];diagEvent('KARTE stabil','1,0 s ohne Bewegung');statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;load(true,'Kartenbereich geändert')},1000);
 }
 const searchInput=document.querySelector('#flightSearch'),searchMsg=document.querySelector('#searchMsg');
 function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hiddenSearch');clearTimeout(showSearchMsg.t);showSearchMsg.t=setTimeout(()=>searchMsg.classList.add('hiddenSearch'),5200)}
@@ -254,8 +254,21 @@ function selectSearchResult(found,q){
     load(true);
   },700);
 }
+const IATA_TO_ICAO_CALLSIGN={
+  QR:'QTR',LH:'DLH',AF:'AFR',BA:'BAW',KL:'KLM',LX:'SWR',OS:'AUA',EW:'EWG',
+  U2:'EZY',W6:'WZZ',VY:'VLG',IB:'IBE',SK:'SAS',AY:'FIN',TP:'TAP',TK:'THY',
+  EK:'UAE',EY:'ETD',SV:'SVA',MS:'MSR',A3:'AEE',LO:'LOT',AC:'ACA',UA:'UAL',
+  AA:'AAL',DL:'DAL',B6:'JBU',WN:'SWA',SQ:'SIA',CX:'CPA',JL:'JAL',NH:'ANA'
+};
 function looksLikeAirlineFlightNumber(q){
-  return /^[A-Z]{2}\d{1,4}[A-Z]?$/.test(q)||/^[A-Z]{2,3}\d{2,4}$/.test(q);
+  return /^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(q)||/^[A-Z]{2,3}\d{2,4}$/.test(q);
+}
+function airlineFlightNumberToCallsign(q){
+  const m=q.replace(/\s+/g,'').match(/^([A-Z0-9]{2})(\d{1,4}[A-Z]?)$/);
+  if(!m)return null;
+  const icao=IATA_TO_ICAO_CALLSIGN[m[1]];
+  if(!icao)return null;
+  return icao+m[2].padStart(m[2].match(/^\d+/)?.[0]?.length<3?3:m[2].length,'0');
 }
 async function globalSearch(){
   const q=searchInput.value.trim().toUpperCase();if(!q)return;
@@ -273,9 +286,14 @@ async function globalSearch(){
   if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase()]);
   else if(q.includes('-'))tries.push(['reg',q]);
   else {
-    // Alphanumerische Airline-Kennungen zuerst als ADS-B-Callsign prüfen.
+    // Erst das exakt eingegebene ADS-B-Callsign prüfen.
     tries.push(['callsign',q]);
-    // Nur als zweite Chance Registrierung versuchen; niemals parallel.
+    // Bei einer üblichen IATA-Flugnummer zusätzlich das bekannte ICAO-Callsign versuchen,
+    // z.B. QR96 -> QTR096 oder LH123 -> DLH123. Das ist nur für Airlines mit eindeutiger
+    // Standardabbildung aktiv; operative Callsigns (z.B. manche Ryanair-Flüge) werden nicht geraten.
+    const mappedCallsign=airlineFlightNumberToCallsign(q);
+    if(mappedCallsign&&mappedCallsign!==q)tries.push(['callsign',mappedCallsign]);
+    // Nur als letzte Chance Registrierung versuchen; niemals parallel.
     tries.push(['reg',q]);
   }
   let list=[],technicalErrors=0,successfulLookups=0,rateLimited=false;
@@ -318,13 +336,13 @@ document.querySelector('#searchBtn').onclick=globalSearch;searchInput.addEventLi
 function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';scheduleMapReload()}
 function locate(){if(!navigator.geolocation){statusEl.textContent='Standort wird von diesem Browser nicht unterstützt';return}if(!lastGood.length)statusEl.textContent='Standort wird gesucht…';navigator.geolocation.getCurrentPosition(setLocation,e=>{const msg=e.code===1?'Standortzugriff nicht erlaubt':e.code===2?'Standort nicht verfügbar':'Standortsuche dauerte zu lange';statusEl.textContent=msg;notice.textContent=msg+'. Du kannst die Karte trotzdem verschieben und Live-Daten laden.';notice.classList.remove('hiddenNotice');load(true,'Standort nicht verfügbar')},{enableHighAccuracy:true,timeout:12000,maximumAge:30000})}
 document.querySelector('#diagBtn').onclick=()=>{document.querySelector('#diagPanel').classList.remove('hiddenDiag');renderDiag()};document.querySelector('#diagCopy').onclick=copyDiagLog;document.querySelector('#diagClose').onclick=()=>document.querySelector('#diagPanel').classList.add('hiddenDiag');document.querySelector('#diagClear').onclick=()=>{diagLog=[];lastDiagSuccessAt=0;saveDiag();renderDiag()};
-document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true,'manueller Retry');map.on('movestart zoomstart',e=>{mapInteraction=true;clearTimeout(mapReloadTimer);diagEvent('KARTE Start',e.type);if(activeController)abortActive('Kartenbewegung: '+e.type)});map.on('moveend',e=>{diagEvent('KARTE Ende',e.type);scheduleMapReload()});map.on('zoomend',e=>{diagEvent('KARTE Ende',e.type);refreshMarkerStyles();scheduleMapReload()});
+document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true,'manueller Retry');map.on('movestart zoomstart',e=>{mapInteraction=true;clearTimeout(mapReloadTimer);diagEvent('KARTE Start',e.type);/* v4.2: laufende Live-Abfragen werden durch Kartenbewegungen nicht mehr abgebrochen. */});map.on('moveend',e=>{diagEvent('KARTE Ende',e.type);scheduleMapReload()});map.on('zoomend',e=>{diagEvent('KARTE Ende',e.type);refreshMarkerStyles();scheduleMapReload()});
 if('serviceWorker'in navigator){
   let refreshing=false;
   const banner=document.querySelector('#updateBanner'),nowBtn=document.querySelector('#updateNow'),laterBtn=document.querySelector('#updateLater');
   const showUpdate=reg=>{if(!reg?.waiting)return;banner.classList.remove('hiddenUpdate');nowBtn.onclick=()=>{nowBtn.disabled=true;nowBtn.textContent='Aktualisiere…';reg.waiting.postMessage({type:'SKIP_WAITING'})};laterBtn.onclick=()=>banner.classList.add('hiddenUpdate')};
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(refreshing)return;refreshing=true;location.reload()});
-  navigator.serviceWorker.register('./sw.js?v=40').then(reg=>{
+  navigator.serviceWorker.register('./sw.js?v=41').then(reg=>{
     if(reg.waiting)showUpdate(reg);
     reg.addEventListener('updatefound',()=>{const w=reg.installing;if(!w)return;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)showUpdate(reg)})});
     reg.update();
