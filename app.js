@@ -124,7 +124,9 @@ async function lookupVerifiedRoute(a){
   }catch(e){console.warn('Route lookup',e);return null}finally{routePending.delete(key)}})();
   routePending.set(key,task);return task;
 }
-function drawRoute(a){if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}const r=a.verifiedRoute;if(!r?.destination||a.lat==null||a.lon==null)return;const d=r.destination;routeLayer=L.polyline([[a.lat,a.lon],[d.lat,d.lon]],{color:'#1677ff',weight:3,dashArray:'8 8',opacity:.8}).addTo(map)}
+function airportName(x){return x?[airportLabel(x),x.municipality||x.location,x.name].filter((v,i,arr)=>v&&arr.indexOf(v)===i).slice(0,2).join(' · '):''}
+function airportPin(x,kind){const start=kind==='start';return L.marker([x.lat,x.lon],{icon:L.divIcon({className:'',html:`<div class="apPin ${start?'apStart':'apEnd'}"><b>${start?'Start':'Landung'}</b><span>${airportLabel(x)}</span></div>`,iconSize:[0,0],iconAnchor:[0,0]}),interactive:false,keyboard:false,zIndexOffset:500})}
+function drawRoute(a){if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}const r=a.verifiedRoute;if(!r?.destination||a.lat==null||a.lon==null)return;const o=r.origin,d=r.destination,g=L.layerGroup();if(o&&o.lat!=null&&o.lon!=null){g.addLayer(L.polyline([[o.lat,o.lon],[a.lat,a.lon]],{color:'#30d158',weight:3,opacity:.75}));g.addLayer(airportPin(o,'start'))}if(d.lat!=null&&d.lon!=null){g.addLayer(L.polyline([[a.lat,a.lon],[d.lat,d.lon]],{color:'#1677ff',weight:3,dashArray:'8 8',opacity:.8}));g.addLayer(airportPin(d,'end'))}routeLayer=g.addTo(map)}
 function fillDetails(a){
   const e=a.enrichment||{},ac=e.aircraft||{},r=e.flightroute||{};
   const alt=metres(a.alt),speed=kmh(a.speed),heading=compass(a.track);
@@ -138,7 +140,7 @@ function fillDetails(a){
   document.querySelector('#reg').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   document.querySelector('#detailType').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   const vr=a.verifiedRoute||null,o=vr?.origin||null,d=vr?.destination||null;const routeText=o&&d?`${airportLabel(o)} → ${airportLabel(d)}`:'Route nicht sicher bestimmt';
-  const routeNames=o&&d?[o.name||o.location,d.name||d.location].filter(Boolean).join(' → '):'Start/Ziel werden nur angezeigt, wenn die positionsbezogene Routenzuordnung plausibel ist.';
+  const routeNames=o&&d?`Start: ${airportName(o)} → Landung: ${airportName(d)}`:'Start/Ziel werden nur angezeigt, wenn die positionsbezogene Routenzuordnung plausibel ist.';
   const routeBox=document.querySelector('.routeBox');document.querySelector('#route').textContent=routeText;routeBox.classList.toggle('noRoute',!o&&!d);document.querySelector('#routeNames').textContent=routeNames;
   document.querySelector('#detailRoute').textContent=routeText;document.querySelector('#detailRouteNames').textContent=routeNames;
   const photo=ac.url_photo||ac.url_photo_thumbnail||'';const img=document.querySelector('#detailPhoto');if(photo){img.src=photo;img.classList.remove('hiddenPhoto')}else{img.removeAttribute('src');img.classList.add('hiddenPhoto')}
