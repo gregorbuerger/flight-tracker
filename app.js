@@ -61,9 +61,9 @@ async function lookupVerifiedRoute(a){
   const task=(async()=>{try{
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),7000);
     try{
-      const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('mode','route');u.searchParams.set('callsign',callsign);u.searchParams.set('lat',a.lat);u.searchParams.set('lon',a.lon);
+      const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('route',callsign);u.searchParams.set('lat',a.lat);u.searchParams.set('lon',a.lon);
       const r=await fetch(u,{cache:'no-store',signal:controller.signal});
-      if(!r.ok)return null; const d=await r.json(); const x=Array.isArray(d)?d[0]:(Array.isArray(d?.routes)?d.routes[0]:null);
+      if(!r.ok)return null; const d=await r.json(); const x=d?.route||(Array.isArray(d)?d[0]:(Array.isArray(d?.routes)?d.routes[0]:null));
       const airports=x?._airports||[]; const valid=!!(x&&x.plausible===true&&airports.length>=2);
       const route=valid?{origin:airports[0],destination:airports[airports.length-1],codes:x._airport_codes_iata||x.airport_codes||''}:null;
       routeCache.set(key,route);return route;
@@ -155,7 +155,7 @@ async function load(force=false){
     if(seq!==requestSeq)return;
     console.warn(e);failCount++;
     if(lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}}
-    else{statusEl.textContent='Live-Daten nicht erreichbar';notice.textContent='Die Live-Flugdaten antworten gerade nicht. Tippe hier für einen neuen Versuch.';notice.classList.remove('hiddenNotice');setTimeout(()=>{if(!lastGood.length)load(true)},6000)}
+    else{const delay=failCount===1?1800:failCount===2?4000:7000;statusEl.textContent=failCount<3?'Live-Verbindung wird aufgebaut…':'Live-Daten momentan nicht erreichbar';notice.textContent=failCount<3?'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…':'Die Live-Flugdaten antworten gerade nicht. Automatischer neuer Versuch läuft; tippe hier für sofort.';notice.classList.remove('hiddenNotice');setTimeout(()=>{if(!lastGood.length&&!searching)load(true)},delay)}
   }finally{
     clearTimeout(timer);
     if(seq===requestSeq){loading=false;activeController=null;refreshRing.classList.remove('loading');nextRefreshAt=Date.now()+REFRESH_MS}
