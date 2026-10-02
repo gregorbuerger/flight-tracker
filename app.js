@@ -6,9 +6,10 @@ let markerByHex=new Map(),center=[48,10],locationMarker=null,accuracyCircle=null
 let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,mapReloadTimer=null,activeAbortReason='';
 let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
-const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=5000;
+const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=4000, RETRY_DELAY_MS=1500;
 let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
-const DIAG_KEY='flight-tracker-diag-v39';let diagLog=[];try{diagLog=JSON.parse(localStorage.getItem(DIAG_KEY)||'[]')}catch(_){diagLog=[]}let lastDiagSuccessAt=0;
+let pendingLoad=false,pendingLoadForce=false,retryTimer=null,retryUsed=false;
+const DIAG_KEY='flight-tracker-diag-v40';let diagLog=[];try{diagLog=JSON.parse(localStorage.getItem(DIAG_KEY)||'[]')}catch(_){diagLog=[]}let lastDiagSuccessAt=0;
 function saveDiag(){try{localStorage.setItem(DIAG_KEY,JSON.stringify(diagLog.slice(-30)))}catch(_){}}
 function addDiag(x){diagLog.push(x);if(diagLog.length>60)diagLog=diagLog.slice(-60);saveDiag();renderDiag()}
 function diagEvent(result,detail=''){addDiag({at:Date.now(),ok:true,event:true,result,detail,totalMs:null,upstreamMs:null,gapMs:null,count:null})}
@@ -19,7 +20,7 @@ function buildDiagText(){
   const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
   const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
   const lines=[
-    'Flight Tracker v3.9 - Live-Diagnose',
+    'Flight Tracker v4.0 - Live-Diagnose',
     `Export: ${new Date().toLocaleString('de-DE')}`,
     `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
     `Erfolg/Fehler: ${ok}/${bad}`,
@@ -59,7 +60,7 @@ let connectionReady=false,startRetryTimer=null,startRetryStep=0;
 let nextRefreshAt=0;const countdownEl=document.querySelector('#countdown'),refreshRing=document.querySelector('#refreshRing');
 function setConnectingUi(){countdownEl.textContent='↻';refreshRing.style.setProperty('--p','0deg');refreshRing.classList.add('loading')}
 function armNormalRefresh(){connectionReady=true;startRetryStep=0;if(startRetryTimer){clearTimeout(startRetryTimer);startRetryTimer=null}refreshRing.classList.remove('loading')}
-function scheduleStartupRetry(){if(connectionReady||searching)return;const delays=[1000,2000,3000];const delay=delays[Math.min(startRetryStep,delays.length-1)];startRetryStep++;if(startRetryTimer)clearTimeout(startRetryTimer);setConnectingUi();startRetryTimer=setTimeout(()=>{startRetryTimer=null;if(!connectionReady&&!searching)load(true)},delay)}
+function scheduleStartupRetry(){if(connectionReady||searching)return;const delays=[1000,2000,3000];const delay=delays[Math.min(startRetryStep,delays.length-1)];startRetryStep++;if(startRetryTimer)clearTimeout(startRetryTimer);setConnectingUi();startRetryTimer=setTimeout(()=>{startRetryTimer=null;if(!connectionReady&&!searching)load(true,'Start-Retry')},delay)}
 const kmh=v=>v==null?'—':Math.round(v*3.6)+' km/h';
 const celsius=v=>v==null?'':Math.round(v)+' °C';
 const windText=(dir,spd)=>dir==null||spd==null?'':`${Math.round(spd*1.852)} km/h aus ${compassWord(dir)}`;
@@ -187,37 +188,43 @@ function queryForCurrentMap(){
   const radius=Math.min(250,Math.max(10,Math.ceil((maxM/1852)*1.12)));
   return {lat:c.lat,lon:c.lng,radius};
 }
-async function fetchProxy(signal,query){const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('lat',query.lat.toFixed(4));u.searchParams.set('lon',query.lon.toFixed(4));u.searchParams.set('radius',String(query.radius));const started=performance.now();const wallStarted=Date.now();netDiag.attempt++;try{const r=await fetch(u,{cache:'no-store',signal});const ms=Math.round(performance.now()-started);netDiag.lastMs=ms;netDiag.lastAt=Date.now();let d=null;try{d=await r.json()}catch(_){d={}}if(!r.ok){netDiag.lastResult='HTTP '+r.status;addDiag({at:wallStarted,ok:false,result:'HTTP '+r.status,totalMs:ms,upstreamMs:d?.ft_upstream_ms??null,gapMs:null,count:null});throw Error('Flight Tracker API '+r.status)}netDiag.lastResult='OK';const gap=lastDiagSuccessAt?wallStarted-lastDiagSuccessAt:null;lastDiagSuccessAt=wallStarted;const arr=(d.ac||[]);addDiag({at:wallStarted,ok:true,result:'HTTP '+r.status,totalMs:ms,upstreamMs:d?.ft_upstream_ms??null,gapMs:gap,count:arr.length});return arr.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}catch(e){if(e?.name==='AbortError'){const ms=Math.round(performance.now()-started);addDiag({at:wallStarted,ok:false,result:'ABBRUCH',detail:activeAbortReason||'AbortController',totalMs:ms,upstreamMs:null,gapMs:null,count:null})}throw e}}
-async function load(force=false){
+async function fetchProxy(signal,query){const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('lat',query.lat.toFixed(4));u.searchParams.set('lon',query.lon.toFixed(4));u.searchParams.set('radius',String(query.radius));const started=performance.now();const wallStarted=Date.now();netDiag.attempt++;try{const r=await fetch(u,{cache:'no-store',signal});const ms=Math.round(performance.now()-started);netDiag.lastMs=ms;netDiag.lastAt=Date.now();let d=null;try{d=await r.json()}catch(_){d={}}if(!r.ok){netDiag.lastResult='HTTP '+r.status;addDiag({at:wallStarted,ok:false,result:'HTTP '+r.status,totalMs:ms,upstreamMs:d?.ft_upstream_ms??null,gapMs:null,count:null});throw Error('Flight Tracker API '+r.status)}netDiag.lastResult='OK';const gap=lastDiagSuccessAt?wallStarted-lastDiagSuccessAt:null;lastDiagSuccessAt=wallStarted;const arr=(d.ac||[]);addDiag({at:wallStarted,ok:true,result:'HTTP '+r.status,totalMs:ms,upstreamMs:d?.ft_upstream_ms??null,gapMs:gap,count:arr.length});return arr.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||'',aircraftType:a.t||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null}))}catch(e){const ms=Math.round(performance.now()-started);if(e?.name==='AbortError'){addDiag({at:wallStarted,ok:false,result:'ABBRUCH',detail:activeAbortReason||'AbortController',totalMs:ms,upstreamMs:null,gapMs:null,count:null})}else{addDiag({at:wallStarted,ok:false,result:'NETZWERKFEHLER',detail:e?.message||String(e),totalMs:ms,upstreamMs:null,gapMs:null,count:null})}throw e}}
+async function load(force=false,reason='scheduler'){
   if(searching)return;
   if(mapInteraction&&!force)return;
+  if(loading){pendingLoad=true;pendingLoadForce=pendingLoadForce||force;diagEvent('REQUEST vorgemerkt',reason);return;}
   if(!force&&Date.now()-lastLoad<4000)return;
   const seq=++requestSeq,query=queryForCurrentMap();
-  if(activeController)abortActive('neuer Live-Abruf');
-  const controller=new AbortController(); activeController=controller;activeAbortReason='';
-  diagEvent('REQUEST gestartet',`seq ${seq} · ${query.lat.toFixed(3)}, ${query.lon.toFixed(3)} · ${query.radius} NM`);
-  let timedOut=false;const timer=setTimeout(()=>{timedOut=true;activeAbortReason='echter 5-s-Timeout';diagEvent('TIMEOUT ausgelöst','5 s ohne Antwort');controller.abort()},REQUEST_TIMEOUT_MS);
+  const controller=new AbortController();activeController=controller;activeAbortReason='';
+  diagEvent('REQUEST gestartet',`seq ${seq} · ${reason} · ${query.lat.toFixed(3)}, ${query.lon.toFixed(3)} · ${query.radius} NM`);
+  let timedOut=false,completed=false;
+  const timer=setTimeout(()=>{if(completed)return;timedOut=true;activeAbortReason='echter 4-s-Timeout';diagEvent('TIMEOUT ausgelöst',`seq ${seq} · 4 s ohne Antwort`);controller.abort()},REQUEST_TIMEOUT_MS);
   loading=true;lastLoad=Date.now();nextRefreshAt=lastLoad+REFRESH_MS;refreshRing.classList.add('loading');
   if(!lastGood.length)statusEl.textContent='Live-Flugzeuge werden geladen…';
   try{
-    const list=await fetchProxy(controller.signal,query);
-    if(seq!==requestSeq)return; // stale response from an older map area
-    latestAppliedSeq=seq;draw(list);armNormalRefresh();
+    const list=await fetchProxy(controller.signal,query);completed=true;
+    if(seq!==requestSeq){diagEvent('REQUEST veraltet',`seq ${seq}`);return;}
+    latestAppliedSeq=seq;draw(list);armNormalRefresh();retryUsed=false;
   }catch(e){
-    if(e?.name==='AbortError'&&!timedOut){return;}
-    if(seq!==requestSeq)return;
+    completed=true;
+    if(seq!==requestSeq){diagEvent('REQUEST Ende veraltet',`seq ${seq} · ${e?.name||'Fehler'}`);return;}
     if(timedOut){netDiag.lastMs=REQUEST_TIMEOUT_MS;netDiag.lastResult='TIMEOUT';netDiag.lastAt=Date.now();}
+    const intentionalAbort=e?.name==='AbortError'&&!timedOut;
+    if(intentionalAbort){diagEvent('REQUEST beendet',`seq ${seq} · absichtlich abgebrochen`);return;}
     console.warn(e);failCount++;
     if(connectionReady||lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}}
-    else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent=timedOut?'Keine Antwort nach 5 Sek. · neuer Versuch folgt automatisch…':'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice');scheduleStartupRetry()}
+    else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent=timedOut?'Keine Antwort nach 4 Sek. · neuer Versuch folgt automatisch…':'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice')}
+    if(!retryUsed&&document.visibilityState==='visible'&&!searching){retryUsed=true;clearTimeout(retryTimer);diagEvent('RETRY geplant',`seq ${seq} · in ${RETRY_DELAY_MS/1000} s`);retryTimer=setTimeout(()=>{retryTimer=null;load(true,'einmaliger Retry')},RETRY_DELAY_MS)}
+    else if(!connectionReady)scheduleStartupRetry();
   }finally{
     clearTimeout(timer);
     if(seq===requestSeq){loading=false;activeController=null;if(connectionReady)refreshRing.classList.remove('loading');else setConnectingUi()}
+    if(pendingLoad&&!loading){const f=pendingLoadForce;pendingLoad=false;pendingLoadForce=false;setTimeout(()=>load(f,'vorgemerkter Abruf'),0)}
   }
 }
 function scheduleMapReload(){
   clearTimeout(mapReloadTimer);
-  mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;load(true)},700);
+  mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;load(true,'Kartenbereich geändert')},700);
 }
 const searchInput=document.querySelector('#flightSearch'),searchMsg=document.querySelector('#searchMsg');
 function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hiddenSearch');clearTimeout(showSearchMsg.t);showSearchMsg.t=setTimeout(()=>searchMsg.classList.add('hiddenSearch'),5200)}
@@ -308,20 +315,20 @@ async function globalSearch(){
   }
 }
 document.querySelector('#searchBtn').onclick=globalSearch;searchInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();globalSearch();searchInput.blur()}});
-function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';setTimeout(()=>load(true),250)}
-function locate(){if(!navigator.geolocation){statusEl.textContent='Standort wird von diesem Browser nicht unterstützt';return}if(!lastGood.length)statusEl.textContent='Standort wird gesucht…';navigator.geolocation.getCurrentPosition(setLocation,e=>{const msg=e.code===1?'Standortzugriff nicht erlaubt':e.code===2?'Standort nicht verfügbar':'Standortsuche dauerte zu lange';statusEl.textContent=msg;notice.textContent=msg+'. Du kannst die Karte trotzdem verschieben und Live-Daten laden.';notice.classList.remove('hiddenNotice');load(true)},{enableHighAccuracy:true,timeout:12000,maximumAge:30000})}
+function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';scheduleMapReload()}
+function locate(){if(!navigator.geolocation){statusEl.textContent='Standort wird von diesem Browser nicht unterstützt';return}if(!lastGood.length)statusEl.textContent='Standort wird gesucht…';navigator.geolocation.getCurrentPosition(setLocation,e=>{const msg=e.code===1?'Standortzugriff nicht erlaubt':e.code===2?'Standort nicht verfügbar':'Standortsuche dauerte zu lange';statusEl.textContent=msg;notice.textContent=msg+'. Du kannst die Karte trotzdem verschieben und Live-Daten laden.';notice.classList.remove('hiddenNotice');load(true,'Standort nicht verfügbar')},{enableHighAccuracy:true,timeout:12000,maximumAge:30000})}
 document.querySelector('#diagBtn').onclick=()=>{document.querySelector('#diagPanel').classList.remove('hiddenDiag');renderDiag()};document.querySelector('#diagCopy').onclick=copyDiagLog;document.querySelector('#diagClose').onclick=()=>document.querySelector('#diagPanel').classList.add('hiddenDiag');document.querySelector('#diagClear').onclick=()=>{diagLog=[];lastDiagSuccessAt=0;saveDiag();renderDiag()};
-document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true);map.on('movestart zoomstart',e=>{mapInteraction=true;clearTimeout(mapReloadTimer);diagEvent('KARTE Start',e.type);if(activeController)abortActive('Kartenbewegung: '+e.type)});map.on('moveend',e=>{diagEvent('KARTE Ende',e.type);scheduleMapReload()});map.on('zoomend',e=>{diagEvent('KARTE Ende',e.type);refreshMarkerStyles();scheduleMapReload()});
+document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true,'manueller Retry');map.on('movestart zoomstart',e=>{mapInteraction=true;clearTimeout(mapReloadTimer);diagEvent('KARTE Start',e.type);if(activeController)abortActive('Kartenbewegung: '+e.type)});map.on('moveend',e=>{diagEvent('KARTE Ende',e.type);scheduleMapReload()});map.on('zoomend',e=>{diagEvent('KARTE Ende',e.type);refreshMarkerStyles();scheduleMapReload()});
 if('serviceWorker'in navigator){
   let refreshing=false;
   const banner=document.querySelector('#updateBanner'),nowBtn=document.querySelector('#updateNow'),laterBtn=document.querySelector('#updateLater');
   const showUpdate=reg=>{if(!reg?.waiting)return;banner.classList.remove('hiddenUpdate');nowBtn.onclick=()=>{nowBtn.disabled=true;nowBtn.textContent='Aktualisiere…';reg.waiting.postMessage({type:'SKIP_WAITING'})};laterBtn.onclick=()=>banner.classList.add('hiddenUpdate')};
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(refreshing)return;refreshing=true;location.reload()});
-  navigator.serviceWorker.register('./sw.js?v=31').then(reg=>{
+  navigator.serviceWorker.register('./sw.js?v=40').then(reg=>{
     if(reg.waiting)showUpdate(reg);
     reg.addEventListener('updatefound',()=>{const w=reg.installing;if(!w)return;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)showUpdate(reg)})});
     reg.update();
     setInterval(()=>reg.update().catch(()=>{}),10*60*1000);
   }).catch(()=>{});
 }
-setConnectingUi();diagEvent('APP gestartet',`visibility=${document.visibilityState}`);setTimeout(locate,500);let lastSchedulerLog=0;setInterval(()=>{const now=Date.now();if(connectionReady&&document.visibilityState==='visible'&&!loading&&!searching&&now>=nextRefreshAt){diagEvent('TIMER fällig',`Verspätung ${Math.max(0,now-nextRefreshAt)} ms`);load()}else if(now-lastSchedulerLog>30000){lastSchedulerLog=now;diagEvent('TIMER heartbeat',`visible=${document.visibilityState} · loading=${loading} · search=${searching} · Rest ${Math.max(0,nextRefreshAt-now)} ms`)}},250);setInterval(()=>{if(!connectionReady){setConnectingUi();return}if(lastGood.length&&!loading)updateStatus();const left=Math.max(0,nextRefreshAt-Date.now());const sec=Math.max(0,Math.ceil(left/1000));countdownEl.textContent=loading?'↻':(sec||'0');refreshRing.style.setProperty('--p',loading?'0deg':`${Math.min(360,Math.max(0,(1-left/REFRESH_MS)*360))}deg`)},200);document.addEventListener('visibilitychange',()=>{diagEvent('VISIBILITY',document.visibilityState);if(document.visibilityState==='visible'){if(connectionReady)nextRefreshAt=Date.now();if(!searching)load(true)}});window.addEventListener('focus',()=>diagEvent('WINDOW focus'));window.addEventListener('blur',()=>diagEvent('WINDOW blur'));window.addEventListener('pageshow',e=>diagEvent('PAGE show',e.persisted?'bfcache':'normal'));window.addEventListener('pagehide',e=>diagEvent('PAGE hide',e.persisted?'bfcache':'normal'));
+setConnectingUi();diagEvent('APP gestartet',`visibility=${document.visibilityState}`);setTimeout(locate,500);let lastSchedulerLog=0;setInterval(()=>{const now=Date.now();if(connectionReady&&document.visibilityState==='visible'&&!loading&&!searching&&now>=nextRefreshAt){diagEvent('TIMER fällig',`Verspätung ${Math.max(0,now-nextRefreshAt)} ms`);load(false,'15-s-Scheduler')}else if(now-lastSchedulerLog>30000){lastSchedulerLog=now;diagEvent('TIMER heartbeat',`visible=${document.visibilityState} · loading=${loading} · search=${searching} · Rest ${Math.max(0,nextRefreshAt-now)} ms`)}},250);setInterval(()=>{if(!connectionReady){setConnectingUi();return}if(lastGood.length&&!loading)updateStatus();const left=Math.max(0,nextRefreshAt-Date.now());const sec=Math.max(0,Math.ceil(left/1000));countdownEl.textContent=loading?'↻':(sec||'0');refreshRing.style.setProperty('--p',loading?'0deg':`${Math.min(360,Math.max(0,(1-left/REFRESH_MS)*360))}deg`)},200);document.addEventListener('visibilitychange',()=>{diagEvent('VISIBILITY',document.visibilityState);if(document.visibilityState==='visible'){if(connectionReady)nextRefreshAt=Date.now();if(!searching)load(true,'App wieder sichtbar')}});window.addEventListener('focus',()=>diagEvent('WINDOW focus'));window.addEventListener('blur',()=>diagEvent('WINDOW blur'));window.addEventListener('pageshow',e=>diagEvent('PAGE show',e.persisted?'bfcache':'normal'));window.addEventListener('pagehide',e=>diagEvent('PAGE hide',e.persisted?'bfcache':'normal'));
