@@ -12,17 +12,19 @@ function json(body: unknown, status = 200, cache = "no-store") {
 }
 
 async function upstream(url: string, init: RequestInit = {}) {
+  const started = performance.now();
   const r = await fetch(url, {
     ...init,
     headers: { Accept: "application/json", ...(init.headers || {}) },
   });
+  const upstreamMs = Math.round(performance.now() - started);
   const text = await r.text();
   let data: any = null;
   try { data = JSON.parse(text); } catch (_) {}
   if (!r.ok) {
-    return { ok: false, status: r.status, data, text: text.slice(0, 300) };
+    return { ok: false, status: r.status, data, text: text.slice(0, 300), upstreamMs };
   }
-  return { ok: true, status: r.status, data };
+  return { ok: true, status: r.status, data, upstreamMs };
 }
 
 function aircraftArray(data: any): any[] {
@@ -33,7 +35,7 @@ function aircraftArray(data: any): any[] {
 
 export default async function (req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-  if (req.method !== "GET") return json({ error: "Method not allowed", ft_relay_version: "3.6-relay" }, 405);
+  if (req.method !== "GET") return json({ error: "Method not allowed", ft_relay_version: "3.7-relay" }, 405);
 
   const u = new URL(req.url);
 
@@ -66,7 +68,7 @@ export default async function (req: Request): Promise<Response> {
       if (!r.ok) {
         return json({
           ac: [],
-          ft_relay_version: "3.6-relay",
+          ft_relay_version: "3.7-relay",
           ft_mode: "search",
           ft_match: kind,
           ft_query: query,
@@ -79,7 +81,7 @@ export default async function (req: Request): Promise<Response> {
       return json({
         ac,
         total: ac.length,
-        ft_relay_version: "3.6-relay",
+        ft_relay_version: "3.7-relay",
         ft_mode: "search",
         ft_match: kind,
         ft_query: query,
@@ -95,7 +97,7 @@ export default async function (req: Request): Promise<Response> {
       const lat = Number(u.searchParams.get("lat"));
       const lon = Number(u.searchParams.get("lon"));
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        return json({ error: "route requires lat and lon", ft_relay_version: "3.6-relay" }, 400);
+        return json({ error: "route requires lat and lon", ft_relay_version: "3.7-relay" }, 400);
       }
       const r = await upstream("https://api.adsb.lol/api/0/routeset", {
         method: "POST",
@@ -103,11 +105,11 @@ export default async function (req: Request): Promise<Response> {
         body: JSON.stringify({ planes: [{ callsign: route, lat, lng: lon }] }),
       });
       if (!r.ok) {
-        return json({ error: "route upstream failed", ft_relay_version: "3.6-relay", ft_mode: "route", ft_upstream_status: r.status }, 502);
+        return json({ error: "route upstream failed", ft_relay_version: "3.7-relay", ft_mode: "route", ft_upstream_status: r.status }, 502);
       }
       const rows = Array.isArray(r.data) ? r.data : [];
       const row = rows[0] || null;
-      return json({ route: row, routes: rows, ft_relay_version: "3.6-relay", ft_mode: "route", ft_upstream_status: r.status });
+      return json({ route: row, routes: rows, ft_relay_version: "3.7-relay", ft_mode: "route", ft_upstream_status: r.status });
     }
 
     // Existing map query: ?lat=...&lon=...&radius=...
@@ -117,7 +119,7 @@ export default async function (req: Request): Promise<Response> {
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
       return json({
         error: "Bitte lat und lon angeben oder reg/callsign/icao verwenden.",
-        ft_relay_version: "3.6-relay",
+        ft_relay_version: "3.7-relay",
       }, 400);
     }
 
@@ -125,21 +127,23 @@ export default async function (req: Request): Promise<Response> {
     if (!r.ok) {
       return json({
         error: "ADS-B upstream failed",
-        ft_relay_version: "3.6-relay",
+        ft_relay_version: "3.7-relay",
         ft_mode: "point",
         ft_upstream_status: r.status,
       }, 502);
     }
 
     const data = r.data || {};
-    data.ft_relay_version = "3.6-relay";
+    data.ft_relay_version = "3.7-relay";
     data.ft_mode = "point";
+    data.ft_upstream_status = r.status;
+    data.ft_upstream_ms = r.upstreamMs;
     return json(data, 200, "public, max-age=10");
   } catch (err) {
     return json({
       error: "Flight-Tracker-Relayfehler",
       detail: String(err),
-      ft_relay_version: "3.6-relay",
+      ft_relay_version: "3.7-relay",
     }, 502);
   }
 }

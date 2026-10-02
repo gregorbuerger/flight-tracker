@@ -1,5 +1,5 @@
-const C='flight-tracker-v3.6';
-const CORE=['./','./index.html','./style.css?v=36','./app.js?v=36','./manifest.json?v=36','./icon-192.png','./icon-512.png','./apple-touch-icon.png'];
+const C='flight-tracker-v3.7';
+const CORE=['./','./index.html','./style.css?v=37','./app.js?v=37','./manifest.json?v=37','./icon-192.png','./icon-512.png','./apple-touch-icon.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(CORE)))});
 self.addEventListener('message',e=>{if(e.data&&e.data.type==='SKIP_WAITING')self.skipWaiting()});
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([self.clients.claim(),caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k))))])));
