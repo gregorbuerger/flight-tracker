@@ -8,12 +8,51 @@ let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
 const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=5000;
 let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
-const DIAG_KEY='flight-tracker-diag-v38';let diagLog=[];try{diagLog=JSON.parse(localStorage.getItem(DIAG_KEY)||'[]')}catch(_){diagLog=[]}let lastDiagSuccessAt=0;
+const DIAG_KEY='flight-tracker-diag-v39';let diagLog=[];try{diagLog=JSON.parse(localStorage.getItem(DIAG_KEY)||'[]')}catch(_){diagLog=[]}let lastDiagSuccessAt=0;
 function saveDiag(){try{localStorage.setItem(DIAG_KEY,JSON.stringify(diagLog.slice(-30)))}catch(_){}}
 function addDiag(x){diagLog.push(x);if(diagLog.length>60)diagLog=diagLog.slice(-60);saveDiag();renderDiag()}
 function diagEvent(result,detail=''){addDiag({at:Date.now(),ok:true,event:true,result,detail,totalMs:null,upstreamMs:null,gapMs:null,count:null})}
 function abortActive(reason){if(!activeController)return;activeAbortReason=reason||'unbekannt';diagEvent('ABORT ausgelöst',activeAbortReason);activeController.abort()}
 function fmtDiagMs(v){return v==null?'—':v<1000?Math.round(v)+' ms':(v/1000).toFixed(1).replace('.',',')+' s'}
+
+function buildDiagText(){
+  const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
+  const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
+  const lines=[
+    'Flight Tracker v3.9 - Live-Diagnose',
+    `Export: ${new Date().toLocaleString('de-DE')}`,
+    `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
+    `Erfolg/Fehler: ${ok}/${bad}`,
+    `Durchschnittliche Antwortzeit: ${fmtDiagMs(avgMs)}`,
+    '',
+    'Zeit | Ergebnis | Detail | Gesamt | Upstream | Abstand | Flugzeuge'
+  ];
+  for(const x of diagLog){
+    lines.push([
+      new Date(x.at).toLocaleTimeString('de-DE',{hour12:false}),
+      x.result||'',
+      (x.detail||'').replace(/\s+/g,' ').trim(),
+      x.event?'—':fmtDiagMs(x.totalMs),
+      x.event?'—':fmtDiagMs(x.upstreamMs),
+      x.event?'—':(x.gapMs==null?'—':fmtDiagMs(x.gapMs)),
+      x.event?'—':(x.count??'—')
+    ].join(' | '));
+  }
+  return lines.join('\n');
+}
+async function copyDiagLog(){
+  const btn=document.querySelector('#diagCopy');
+  const text=buildDiagText();
+  try{
+    if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text)}else{
+      const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();
+      if(!document.execCommand('copy'))throw new Error('copy failed');ta.remove();
+    }
+    if(btn){const old=btn.textContent;btn.textContent='✓ Log kopiert';setTimeout(()=>btn.textContent=old,1800)}
+  }catch(e){
+    if(btn){const old=btn.textContent;btn.textContent='Kopieren fehlgeschlagen';setTimeout(()=>btn.textContent=old,2200)}
+  }
+}
 function renderDiag(){const sum=document.querySelector('#diagSummary'),rows=document.querySelector('#diagRows');if(!sum||!rows)return;const req=diagLog.filter(x=>!x.event),last=req[req.length-1],ok=req.filter(x=>x.ok).length,bad=req.length-ok;const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;sum.innerHTML=`<div class="diagCard"><small>Soll-Intervall</small><strong>${(REFRESH_MS/1000).toFixed(0)} s</strong></div><div class="diagCard"><small>Letzter Abruf</small><strong>${last?fmtDiagMs(last.totalMs):'—'}</strong></div><div class="diagCard"><small>Ø Antwortzeit</small><strong>${fmtDiagMs(avgMs)}</strong></div><div class="diagCard"><small>Erfolg / Fehler</small><strong>${ok} / ${bad}</strong></div>`;rows.innerHTML=diagLog.slice().reverse().map(x=>`<tr><td>${new Date(x.at).toLocaleTimeString('de-DE')}</td><td class="${x.event?'diagEvent':(x.ok?'diagOk':'diagBad')}">${x.result}${x.detail?`<small class="diagDetail">${x.detail}</small>`:''}</td><td>${x.event?'—':fmtDiagMs(x.totalMs)}</td><td>${x.event?'—':fmtDiagMs(x.upstreamMs)}</td><td>${x.event?'—':(x.gapMs==null?'—':fmtDiagMs(x.gapMs))}</td><td>${x.event?'—':(x.count??'—')}</td></tr>`).join('')}
 
 let connectionReady=false,startRetryTimer=null,startRetryStep=0;
@@ -271,7 +310,7 @@ async function globalSearch(){
 document.querySelector('#searchBtn').onclick=globalSearch;searchInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();globalSearch();searchInput.blur()}});
 function setLocation(p){const ll=[p.coords.latitude,p.coords.longitude],acc=p.coords.accuracy||0;center=ll;if(locationMarker)map.removeLayer(locationMarker);if(accuracyCircle)map.removeLayer(accuracyCircle);locationMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:'#1677ff',fillOpacity:1}).addTo(map).bindTooltip('Dein Standort');accuracyCircle=L.circle(ll,{radius:acc,weight:1,color:'#1677ff',fillColor:'#1677ff',fillOpacity:.10}).addTo(map);map.setView(ll,10);if(!lastGood.length)statusEl.textContent='Standort gefunden · lade Flugzeuge…';setTimeout(()=>load(true),250)}
 function locate(){if(!navigator.geolocation){statusEl.textContent='Standort wird von diesem Browser nicht unterstützt';return}if(!lastGood.length)statusEl.textContent='Standort wird gesucht…';navigator.geolocation.getCurrentPosition(setLocation,e=>{const msg=e.code===1?'Standortzugriff nicht erlaubt':e.code===2?'Standort nicht verfügbar':'Standortsuche dauerte zu lange';statusEl.textContent=msg;notice.textContent=msg+'. Du kannst die Karte trotzdem verschieben und Live-Daten laden.';notice.classList.remove('hiddenNotice');load(true)},{enableHighAccuracy:true,timeout:12000,maximumAge:30000})}
-document.querySelector('#diagBtn').onclick=()=>{document.querySelector('#diagPanel').classList.remove('hiddenDiag');renderDiag()};document.querySelector('#diagClose').onclick=()=>document.querySelector('#diagPanel').classList.add('hiddenDiag');document.querySelector('#diagClear').onclick=()=>{diagLog=[];lastDiagSuccessAt=0;saveDiag();renderDiag()};
+document.querySelector('#diagBtn').onclick=()=>{document.querySelector('#diagPanel').classList.remove('hiddenDiag');renderDiag()};document.querySelector('#diagCopy').onclick=copyDiagLog;document.querySelector('#diagClose').onclick=()=>document.querySelector('#diagPanel').classList.add('hiddenDiag');document.querySelector('#diagClear').onclick=()=>{diagLog=[];lastDiagSuccessAt=0;saveDiag();renderDiag()};
 document.querySelector('#locate').onclick=locate;document.querySelector('#detailsBtn').onclick=()=>{document.querySelector('#detailPage').classList.remove('hiddenDetail')};document.querySelector('#detailBack').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailPage').classList.add('hiddenDetail');document.querySelector('#close').onclick=()=>{sheet.classList.add('hidden');selectedHex=null;selectedAircraft=null;selectedMissingSince=0;if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}refreshMarkerStyles()};notice.onclick=()=>load(true);map.on('movestart zoomstart',e=>{mapInteraction=true;clearTimeout(mapReloadTimer);diagEvent('KARTE Start',e.type);if(activeController)abortActive('Kartenbewegung: '+e.type)});map.on('moveend',e=>{diagEvent('KARTE Ende',e.type);scheduleMapReload()});map.on('zoomend',e=>{diagEvent('KARTE Ende',e.type);refreshMarkerStyles();scheduleMapReload()});
 if('serviceWorker'in navigator){
   let refreshing=false;
