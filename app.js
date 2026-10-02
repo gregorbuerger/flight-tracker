@@ -6,7 +6,7 @@ let markerByHex=new Map(),center=[48,10],locationMarker=null,accuracyCircle=null
 let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,mapReloadTimer=null,activeAbortReason='';
 let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
-const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=4000, RETRY_DELAY_MS=1500;
+const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=8000, RETRY_DELAY_MS=1500, MAP_SETTLE_MS=3000;
 let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
 let pendingLoad=false,pendingLoadForce=false,retryTimer=null,retryUsed=false;
 const DIAG_KEY='flight-tracker-diag-v41';let diagLog=[];try{diagLog=JSON.parse(localStorage.getItem(DIAG_KEY)||'[]')}catch(_){diagLog=[]}let lastDiagSuccessAt=0;
@@ -20,7 +20,7 @@ function buildDiagText(){
   const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
   const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
   const lines=[
-    'Flight Tracker v4.3 - Live-Diagnose',
+    'Flight Tracker v4.4 - Live-Diagnose',
     `Export: ${new Date().toLocaleString('de-DE')}`,
     `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
     `Erfolg/Fehler: ${ok}/${bad}`,
@@ -198,7 +198,7 @@ async function load(force=false,reason='scheduler'){
   const controller=new AbortController();activeController=controller;activeAbortReason='';
   diagEvent('REQUEST gestartet',`seq ${seq} · ${reason} · ${query.lat.toFixed(3)}, ${query.lon.toFixed(3)} · ${query.radius} NM`);
   let timedOut=false,completed=false;
-  const timer=setTimeout(()=>{if(completed)return;timedOut=true;activeAbortReason='echter 4-s-Timeout';diagEvent('TIMEOUT ausgelöst',`seq ${seq} · 4 s ohne Antwort`);controller.abort()},REQUEST_TIMEOUT_MS);
+  const timer=setTimeout(()=>{if(completed)return;timedOut=true;activeAbortReason='echter 8-s-Timeout';diagEvent('TIMEOUT ausgelöst',`seq ${seq} · 8 s ohne Antwort`);controller.abort()},REQUEST_TIMEOUT_MS);
   loading=true;lastLoad=Date.now();nextRefreshAt=lastLoad+REFRESH_MS;refreshRing.classList.add('loading');
   if(!lastGood.length)statusEl.textContent='Live-Flugzeuge werden geladen…';
   try{
@@ -213,8 +213,8 @@ async function load(force=false,reason='scheduler'){
     if(intentionalAbort){diagEvent('REQUEST beendet',`seq ${seq} · absichtlich abgebrochen`);return;}
     console.warn(e);failCount++;
     if(connectionReady||lastGood.length){updateStatus();if(failCount>=3){notice.textContent='Live-Aktualisierung momentan unterbrochen. Die zuletzt geladenen Flugzeuge bleiben sichtbar.';notice.classList.remove('hiddenNotice')}}
-    else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent=timedOut?'Keine Antwort nach 4 Sek. · neuer Versuch folgt automatisch…':'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice')}
-    if(!retryUsed&&document.visibilityState==='visible'&&!searching){retryUsed=true;clearTimeout(retryTimer);diagEvent('RETRY geplant',`seq ${seq} · in ${RETRY_DELAY_MS/1000} s`);retryTimer=setTimeout(()=>{retryTimer=null;load(true,'einmaliger Retry')},RETRY_DELAY_MS)}
+    else{statusEl.textContent='Live-Verbindung wird aufgebaut…';notice.textContent=timedOut?'Keine Antwort nach 8 Sek. · neuer Versuch folgt automatisch…':'Live-Verbindung wird aufgebaut – automatischer neuer Versuch…';notice.classList.remove('hiddenNotice')}
+    if(!retryUsed&&document.visibilityState==='visible'&&!searching&&!mapInteraction){retryUsed=true;clearTimeout(retryTimer);diagEvent('RETRY geplant',`seq ${seq} · in ${RETRY_DELAY_MS/1000} s`);retryTimer=setTimeout(()=>{retryTimer=null;load(true,'einmaliger Retry')},RETRY_DELAY_MS)}
     else if(!connectionReady)scheduleStartupRetry();
   }finally{
     clearTimeout(timer);
@@ -224,7 +224,7 @@ async function load(force=false,reason='scheduler'){
 }
 function scheduleMapReload(){
   clearTimeout(mapReloadTimer);
-  mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];diagEvent('KARTE stabil','1,0 s ohne Bewegung');statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;load(true,'Kartenbereich geändert')},1000);
+  mapReloadTimer=setTimeout(()=>{mapInteraction=false;const c=map.getCenter();center=[c.lat,c.lng];diagEvent('KARTE stabil',`${(MAP_SETTLE_MS/1000).toFixed(0)},0 s ohne Bewegung`);statusEl.textContent='Lade Flugzeuge für diesen Kartenausschnitt…';nextRefreshAt=Date.now()+REFRESH_MS;retryUsed=false;clearTimeout(retryTimer);retryTimer=null;load(true,'Kartenbereich geändert')},MAP_SETTLE_MS);
 }
 const searchInput=document.querySelector('#flightSearch'),searchMsg=document.querySelector('#searchMsg');
 function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hiddenSearch');clearTimeout(showSearchMsg.t);showSearchMsg.t=setTimeout(()=>searchMsg.classList.add('hiddenSearch'),5200)}
