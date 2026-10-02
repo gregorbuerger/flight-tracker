@@ -20,7 +20,7 @@ function buildDiagText(){
   const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
   const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
   const lines=[
-    'Flight Tracker v4.2 - Live-Diagnose',
+    'Flight Tracker v4.3 - Live-Diagnose',
     `Export: ${new Date().toLocaleString('de-DE')}`,
     `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
     `Erfolg/Fehler: ${ok}/${bad}`,
@@ -275,61 +275,72 @@ async function globalSearch(){
   const ranked=lastGood.map(a=>({a,score:scoreSearch(a,q)})).filter(x=>x.score>0).sort((x,y)=>y.score-x.score);
   if(ranked.length){selectSearchResult(ranked[0].a,q);return}
   if(searching){showSearchMsg('Suche läuft bereits…');return}
-  searching=true;const run=++searchRun;
-  document.querySelector('#searchBtn').disabled=true;
-  // Suche hat Vorrang: einen laufenden Kartenrequest abbrechen und den Auto-Refresh pausieren.
-  if(activeController){activeController.abort();activeController=null;loading=false;refreshRing.classList.remove('loading');requestSeq++}
+  searching=true;const run=++searchRun;const searchBtn=document.querySelector('#searchBtn');searchBtn.disabled=true;
   clearTimeout(mapReloadTimer);if(connectionReady)nextRefreshAt=Date.now()+REFRESH_MS;
-  showSearchMsg('Suche weltweit…');
+  showSearchMsg('Suche nach aktuellem Flug…');
+  diagEvent('SUCHE gestartet',q);
   const compact=q.replace(/[^A-Z0-9]/g,'');
   const tries=[];
-  if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase()]);
-  else if(q.includes('-'))tries.push(['reg',q]);
+  if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase(),compact]);
+  else if(q.includes('-'))tries.push(['reg',q,q]);
   else {
-    // Erst das exakt eingegebene ADS-B-Callsign prüfen.
-    tries.push(['callsign',q]);
-    // Bei einer üblichen IATA-Flugnummer zusätzlich das bekannte ICAO-Callsign versuchen,
-    // z.B. QR96 -> QTR096 oder LH123 -> DLH123. Das ist nur für Airlines mit eindeutiger
-    // Standardabbildung aktiv; operative Callsigns (z.B. manche Ryanair-Flüge) werden nicht geraten.
     const mappedCallsign=airlineFlightNumberToCallsign(q);
-    if(mappedCallsign&&mappedCallsign!==q)tries.push(['callsign',mappedCallsign]);
-    // Nur als letzte Chance Registrierung versuchen; niemals parallel.
-    tries.push(['reg',q]);
+    // Fuer normale Nutzer ist die oeffentliche Flugnummer der primaere Suchbegriff.
+    // Wenn eine eindeutige IATA->ICAO-Abbildung existiert, wird diese zuerst versucht.
+    if(mappedCallsign&&mappedCallsign!==q)tries.push(['callsign',mappedCallsign,q]);
+    tries.push(['callsign',q,q]);
+    tries.push(['reg',q,q]);
   }
   let list=[],technicalErrors=0,successfulLookups=0,rateLimited=false;
+  const fetchSearch=async(kind,value,display,attempt)=>{
+    if(run!==searchRun)return null;
+    const controller=new AbortController();searchController=controller;let timedOut=false;
+    const timer=setTimeout(()=>{timedOut=true;controller.abort()},REQUEST_TIMEOUT_MS);
+    const started=performance.now();
+    diagEvent(attempt===1?'SUCHE Request':'SUCHE Retry',`${display} → ${kind}:${value}`);
+    try{
+      const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set(kind,value);
+      const r=await fetch(u,{cache:'no-store',signal:controller.signal});
+      const ms=Math.round(performance.now()-started);
+      if(r.status===429){rateLimited=true;technicalErrors++;diagEvent('SUCHE HTTP 429',`${display} · ${ms} ms`);return []}
+      if(!r.ok){technicalErrors++;diagEvent('SUCHE HTTP '+r.status,`${display} · ${ms} ms`);return []}
+      const d=await r.json();
+      if(d?.upstream_status===429||d?.ft_upstream_status===429){rateLimited=true;technicalErrors++;diagEvent('SUCHE Upstream 429',display);return []}
+      if(d?.error){technicalErrors++;diagEvent('SUCHE Fehler',`${display} · ${d.error}`);return []}
+      successfulLookups++;
+      const raw=(d.ac||d.aircraft||[]);
+      const found=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
+      diagEvent('SUCHE HTTP 200',`${display} · ${found.length} Treffer · ${ms} ms`);
+      return found;
+    }catch(e){
+      const ms=Math.round(performance.now()-started);
+      technicalErrors++;
+      diagEvent(timedOut?'SUCHE Timeout':'SUCHE Netzwerkfehler',`${display} · ${e?.message||String(e)} · ${ms} ms`);
+      return null;
+    }finally{clearTimeout(timer);if(searchController===controller)searchController=null}
+  };
   try{
-    for(const [kind,value] of tries){
+    for(const [kind,value,display] of tries){
       if(run!==searchRun)return;
-      const controller=new AbortController();searchController=controller;let searchTimedOut=false;const timer=setTimeout(()=>{searchTimedOut=true;controller.abort()},REQUEST_TIMEOUT_MS);
-      try{
-        const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set(kind,value);
-        const r=await fetch(u,{cache:'no-store',signal:controller.signal});
-        if(r.status===429){rateLimited=true;technicalErrors++;continue}
-        if(!r.ok){technicalErrors++;continue}
-        const d=await r.json();
-        if(d?.upstream_status===429){rateLimited=true;technicalErrors++;continue}
-        if(d?.error){technicalErrors++;continue}
-        successfulLookups++;
-        const raw=(d.ac||d.aircraft||[]);
-        list=raw.map(a=>({hex:a.hex,flight:(a.flight||a.callsign||'').trim(),registration:a.r||a.registration||'',aircraftType:a.t||a.aircraft_type||'',description:a.desc||'',category:a.category||'',lon:a.lon,lat:a.lat,alt:a.alt_baro==='ground'?0:(a.alt_baro==null?null:a.alt_baro*.3048),altGeom:a.alt_geom==null?null:a.alt_geom*.3048,speed:a.gs==null?null:a.gs*.514444,track:a.track,rate:a.baro_rate==null?null:a.baro_rate*.00508,squawk:a.squawk,source:a.type||'',oat:a.oat??null,tat:a.tat??null,mach:a.mach??null,windDir:a.wd??null,windSpeed:a.ws??null,ias:a.ias??null,tas:a.tas??null})).filter(a=>a.lat!=null&&a.lon!=null);
-        if(list.length)break;
-      }catch(e){if(e?.name!=='AbortError'||searchTimedOut)console.warn('Global search '+kind,e);technicalErrors++;if(searchTimedOut)netDiag.lastResult='SEARCH TIMEOUT'}
-      finally{clearTimeout(timer);if(searchController===controller)searchController=null}
+      let found=await fetchSearch(kind,value,display,1);
+      if(found===null&&run===searchRun){
+        await new Promise(r=>setTimeout(r,1200));
+        if(run!==searchRun)return;
+        found=await fetchSearch(kind,value,display,2);
+      }
+      if(found&&found.length){list=found;break}
     }
     if(run!==searchRun)return;
     if(list.length){
       const best=list.map(a=>({a,score:scoreSearch(a,q)})).sort((x,y)=>y.score-x.score)[0]?.a||list[0];
+      diagEvent('SUCHE Treffer',`${q} → ${best.flight||best.registration||best.hex}`);
       selectSearchResult(best,q);return;
     }
-    if(successfulLookups>0){
-      if(looksLikeAirlineFlightNumber(q))showSearchMsg('„'+q+'“ wurde nicht als aktuelles ADS-B-Rufzeichen gefunden. Das kann eine Flugnummer sein; Flugnummer und ADS-B-Rufzeichen können verschieden sein.');
-      else showSearchMsg('Kein aktuelles Live-Signal für „'+q+'“ gefunden.');
-      return;
-    }
-    if(rateLimited)showSearchMsg('Live-Suche kurz ausgelastet. Bitte in einigen Sekunden erneut versuchen.');
-    else showSearchMsg(technicalErrors?'Globale Suche momentan technisch nicht erreichbar.':'Kein aktuelles Live-Signal für „'+q+'“ gefunden.');
+    if(successfulLookups>0){showSearchMsg('Kein aktuell empfangenes Flugzeug für „'+q+'“ gefunden.');return}
+    if(rateLimited)showSearchMsg('Live-Suche kurz ausgelastet. Automatischer Versuch war ebenfalls erfolglos.');
+    else showSearchMsg(technicalErrors?'Globale Suche momentan nicht erreichbar. Zwei Versuche sind fehlgeschlagen.':'Kein aktuelles Live-Signal für „'+q+'“ gefunden.');
   }finally{
-    if(run===searchRun){searching=false;searchController=null;document.querySelector('#searchBtn').disabled=false;nextRefreshAt=Date.now()+REFRESH_MS}
+    if(run===searchRun){searching=false;searchController=null;searchBtn.disabled=false;nextRefreshAt=Date.now()+REFRESH_MS;diagEvent('SUCHE beendet',q)}
   }
 }
 document.querySelector('#searchBtn').onclick=globalSearch;searchInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();globalSearch();searchInput.blur()}});
