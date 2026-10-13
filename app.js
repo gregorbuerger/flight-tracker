@@ -6,6 +6,8 @@ let markerByHex=new Map(),center=[48,10],locationMarker=null,accuracyCircle=null
 let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,mapReloadTimer=null,activeAbortReason='';
 let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
+const AVIATION_CACHE_KEY='flight-tracker-aviation-v48',AVIATION_CACHE_MS=2*60*60*1000;let aviationCache={};try{aviationCache=JSON.parse(localStorage.getItem(AVIATION_CACHE_KEY)||'{}')}catch(_){aviationCache={}}
+function saveAviationCache(){try{localStorage.setItem(AVIATION_CACHE_KEY,JSON.stringify(aviationCache))}catch(_){}}
 const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=8000, RETRY_DELAY_MS=1500, MAP_SETTLE_MS=3000;
 let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
 let pendingLoad=false,pendingLoadForce=false,retryTimer=null,retryUsed=false;
@@ -20,7 +22,7 @@ function buildDiagText(){
   const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
   const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
   const lines=[
-    'Flight Tracker v4.7 - Live-Diagnose',
+    'Flight Tracker v4.8 - Live-Diagnose',
     `Export: ${new Date().toLocaleString('de-DE')}`,
     `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
     `Erfolg/Fehler: ${ok}/${bad}`,
@@ -141,7 +143,7 @@ function fillDetails(a){
   document.querySelector('#reg').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   document.querySelector('#detailType').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   const vr=effectiveRoute(a),o=vr?.origin||null,d=vr?.destination||null;const routeText=o&&d?`${airportLabel(o)} → ${airportLabel(d)}`:'Route nicht sicher bestimmt';
-  const routeNames=o&&d?`Start: ${airportName(o)} → Landung: ${airportName(d)}${vr.verified?'':' (laut Callsign-Datenbank, nicht geprüft)'}`:'Für diesen Flug liegen keine Start-/Zieldaten vor.';
+  const av=a.aviation||null;const tf=v=>{if(!v)return'';try{return new Date(v).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}catch(_){return''}};const timeBits=av?[av.departure?.actual&&('Abflug '+tf(av.departure.actual)),av.arrival?.estimated&&('Ankunft erwartet '+tf(av.arrival.estimated)),av.departure?.gate&&('Gate '+av.departure.gate)].filter(Boolean).join(' · '):'';const routeNames=o&&d?`Start: ${airportName(o)} → Landung: ${airportName(d)}${vr.verified?'':' (laut Callsign-Datenbank, nicht geprüft)'}${timeBits?' · '+timeBits:''}`:'Für diesen Flug liegen keine Start-/Zieldaten vor.';
   const routeBox=document.querySelector('.routeBox');document.querySelector('#route').textContent=routeText;routeBox.classList.toggle('noRoute',!o&&!d);document.querySelector('#routeNames').textContent=routeNames;
   document.querySelector('#detailRoute').textContent=routeText;document.querySelector('#detailRouteNames').textContent=routeNames;
   const photo=ac.url_photo||ac.url_photo_thumbnail||'';const img=document.querySelector('#detailPhoto');if(photo){img.src=photo;img.classList.remove('hiddenPhoto')}else{img.removeAttribute('src');img.classList.add('hiddenPhoto')}
@@ -153,7 +155,7 @@ function fillDetails(a){
 function addTrailPoint(a){if(!a.hex||a.lat==null||a.lon==null)return;let pts=trailByHex.get(a.hex)||[];const last=pts[pts.length-1];if(!last||Math.abs(last[0]-a.lat)>0.00005||Math.abs(last[1]-a.lon)>0.00005){pts.push([a.lat,a.lon]);if(pts.length>240)pts=pts.slice(-240);trailByHex.set(a.hex,pts)}if(normHex(a.hex)===normHex(selectedHex))drawTrail(a.hex)}
 function drawTrail(hex){if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}const pts=trailByHex.get(hex)||[];if(pts.length>1)trailLayer=L.polyline(pts,{color:'#ff9f0a',weight:3,opacity:.8}).addTo(map);if(selectedAircraft)drawRoute(selectedAircraft)}
 function normHex(v){return String(v||'').trim().toLowerCase()}
-function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};a.publicFlight=(fr.callsign_iata||'').trim().toUpperCase();a.icaoCallsign=(fr.callsign_icao||'').trim().toUpperCase();selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
+function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};a.publicFlight=a.publicFlight||(fr.callsign_iata||'').trim().toUpperCase();a.icaoCallsign=a.icaoCallsign||(fr.callsign_icao||'').trim().toUpperCase();selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){if(r||!a.verifiedRoute?.aviationstack)a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
 const svgPlane=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 3h6l3 23 19 10v6l-19-4-2 15 8 5v4l-12-2-12 2v-4l8-5-2-15-19 4v-6l19-10z"/></svg>`;
 const svgHeli=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13h48v4H35v8c8 1 14 7 15 15h7v5h-8c-2 7-8 11-16 11H20c-7 0-12-5-12-12 0-8 6-14 14-14h7V17H8zm14 23c-5 0-8 3-8 8 0 4 3 6 7 6h11V36zm16 0v14c4-1 7-4 7-8s-3-6-7-6z"/><path d="M46 24h4v9h-4zM50 27h10v4H50z"/></svg>`;
 const svgLight=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 6h6l2 22 20 7v6l-20-2-2 13 8 4v4l-11-2-11 2v-4l8-4-2-13-20 2v-6l20-7z"/></svg>`;
@@ -273,6 +275,43 @@ function airlineFlightNumberToCallsign(q){
   if(!icao)return null;
   return icao+m[2].padStart(m[2].match(/^\d+/)?.[0]?.length<3?3:m[2].length,'0');
 }
+
+function aviationRouteObject(x){
+  if(!x)return null;
+  const ap=(v)=>v?{iata_code:v.iata||'',icao_code:v.icao||'',municipality:v.airport||'',name:v.airport||''}:null;
+  return {origin:ap(x.departure),destination:ap(x.arrival),verified:true,aviationstack:true};
+}
+function chooseActiveFlight(data,q){
+  const rows=Array.isArray(data?.data)?data.data:[];
+  const uq=String(q||'').replace(/\s+/g,'').toUpperCase();
+  return rows.find(x=>String(x?.flight?.iata||'').toUpperCase()===uq&&x?.flight_status==='active')
+    ||rows.find(x=>String(x?.flight?.iata||'').toUpperCase()===uq&&x?.live)
+    ||rows.find(x=>String(x?.flight?.iata||'').toUpperCase()===uq)
+    ||rows.find(x=>x?.flight_status==='active')||rows[0]||null;
+}
+async function resolveViaAviationstack(q,run){
+  if(!looksLikeAirlineFlightNumber(q))return null;
+  const key=String(q).replace(/\s+/g,'').toUpperCase(),cached=aviationCache[key];
+  if(cached&&Date.now()-cached.savedAt<AVIATION_CACHE_MS){diagEvent('SUCHE Aviationstack Cache',key);return cached.value}
+  const controller=new AbortController();searchController=controller;let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort()},REQUEST_TIMEOUT_MS);const started=performance.now();
+  diagEvent('SUCHE Aviationstack',key);
+  try{
+    const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('flight',key);
+    const r=await fetch(u,{cache:'no-store',signal:controller.signal});const ms=Math.round(performance.now()-started);
+    if(!r.ok){diagEvent('SUCHE Aviationstack '+r.status,`${key} · ${ms} ms`);return null}
+    const d=await r.json(),x=chooseActiveFlight(d,key);if(!x){diagEvent('SUCHE Aviationstack leer',`${key} · ${ms} ms`);return null}
+    const hex=String(x?.aircraft?.icao24||'').trim().toLowerCase();
+    const value={iata:String(x?.flight?.iata||key).toUpperCase(),icao:String(x?.flight?.icao||'').toUpperCase(),hex,registration:String(x?.aircraft?.registration||'').toUpperCase(),data:x};
+    aviationCache[key]={savedAt:Date.now(),value};saveAviationCache();
+    diagEvent('SUCHE Aviationstack Treffer',`${value.iata} → ${hex?hex.toUpperCase():'keine ICAO24'}`);return value;
+  }catch(e){diagEvent(timedOut?'SUCHE Aviationstack Timeout':'SUCHE Aviationstack Fehler',`${key} · ${e?.message||String(e)}`);return null}
+  finally{clearTimeout(timer);if(searchController===controller)searchController=null}
+}
+function applyAviationData(a,av){
+  if(!a||!av?.data)return;const x=av.data;a.aviation=x;a.publicFlight=av.iata||a.publicFlight;a.icaoCallsign=av.icao||a.icaoCallsign;
+  const rr=aviationRouteObject(x);if(rr?.origin&&rr?.destination)a.verifiedRoute=rr;
+}
+
 async function resolvePublicFlightNumber(q,run){
   if(!looksLikeAirlineFlightNumber(q))return null;
   const controller=new AbortController();let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort()},7000);const started=performance.now();
@@ -303,13 +342,17 @@ async function globalSearch(){
   if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase(),compact]);
   else if(q.includes('-'))tries.push(['reg',q,q]);
   else {
-    // Eine oeffentliche Flugnummer (z.B. LH1829) wird zuerst ueber ADSBDB auf das
-    // operative ICAO/ADS-B-Callsign (z.B. DLH03W) aufgeloest. Erst danach folgt die Live-Suche.
-    resolvedFlight=await resolvePublicFlightNumber(q,run);
+    // Oeffentliche Flugnummer: Aviationstack liefert die konkrete heutige Maschine samt ICAO24.
+    // Damit suchen wir das Live-Flugzeug bei adsb.lol, ohne das operative Callsign erraten zu muessen.
+    resolvedFlight=await resolveViaAviationstack(q,run);
     if(run!==searchRun)return;
-    if(resolvedFlight?.icao&&resolvedFlight.icao!==q)tries.push(['callsign',resolvedFlight.icao,q]);
+    if(resolvedFlight?.hex)tries.push(['icao',resolvedFlight.hex,q]);
+    if(resolvedFlight?.registration)tries.push(['reg',resolvedFlight.registration,q]);
+    // Kostenloser Fallback, falls Aviationstack keinen konkreten aktiven Flug liefert.
+    if(!resolvedFlight){resolvedFlight=await resolvePublicFlightNumber(q,run);if(run!==searchRun)return;}
+    if(resolvedFlight?.icao&&resolvedFlight.icao!==q&&!resolvedFlight?.hex)tries.push(['callsign',resolvedFlight.icao,q]);
     const mappedCallsign=airlineFlightNumberToCallsign(q);
-    if(mappedCallsign&&mappedCallsign!==q&&mappedCallsign!==resolvedFlight?.icao)tries.push(['callsign',mappedCallsign,q]);
+    if(mappedCallsign&&mappedCallsign!==q&&mappedCallsign!==resolvedFlight?.icao&&!resolvedFlight?.hex)tries.push(['callsign',mappedCallsign,q]);
     tries.push(['callsign',q,q]);
     tries.push(['reg',q,q]);
   }
@@ -355,7 +398,7 @@ async function globalSearch(){
     if(run!==searchRun)return;
     if(list.length){
       const best=list.map(a=>({a,score:scoreSearch(a,q)})).sort((x,y)=>y.score-x.score)[0]?.a||list[0];
-      if(resolvedFlight){best.publicFlight=resolvedFlight.iata;best.icaoCallsign=resolvedFlight.icao;best.enrichment={...(best.enrichment||{}),flightroute:resolvedFlight.route}}
+      if(resolvedFlight){best.publicFlight=resolvedFlight.iata;best.icaoCallsign=resolvedFlight.icao;if(resolvedFlight.data)applyAviationData(best,resolvedFlight);else best.enrichment={...(best.enrichment||{}),flightroute:resolvedFlight.route}}
       diagEvent('SUCHE Treffer',`${q} → ${best.flight||best.registration||best.hex}`);
       selectSearchResult(best,q);return;
     }
