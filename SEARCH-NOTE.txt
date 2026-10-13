@@ -1,1 +1,1 @@
-v4.11: Öffentliche Flugnummern werden immer zuerst über Aviationstack aufgelöst. Ein lokaler/ungeprüfter Callsign-Treffer darf diesen Lookup nicht mehr abfangen. Aviationstack-Airline-Abfragen beim normalen Antippen wurden wieder entfernt.
+v4.12: Flugnummernsuche matcht Aviationstack-Fluege robust ueber ICAO24 und Registrierung. Registrierung bleibt immer unabhaengiger Fallback; ungepruefte Callsign-Routen duerfen aktuelle Aviationstack-Flugdaten nicht ueberschreiben.

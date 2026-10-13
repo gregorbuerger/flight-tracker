@@ -6,7 +6,7 @@ let markerByHex=new Map(),center=[48,10],locationMarker=null,accuracyCircle=null
 let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,mapReloadTimer=null,activeAbortReason='';
 let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
-const AVIATION_CACHE_KEY='flight-tracker-aviation-v411',AVIATION_CACHE_MS=2*60*60*1000;let aviationCache={};try{aviationCache=JSON.parse(localStorage.getItem(AVIATION_CACHE_KEY)||'{}')}catch(_){aviationCache={}}
+const AVIATION_CACHE_KEY='flight-tracker-aviation-v412',AVIATION_CACHE_MS=2*60*60*1000;let aviationCache={};try{aviationCache=JSON.parse(localStorage.getItem(AVIATION_CACHE_KEY)||'{}')}catch(_){aviationCache={}}
 function saveAviationCache(){try{localStorage.setItem(AVIATION_CACHE_KEY,JSON.stringify(aviationCache))}catch(_){}}
 const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=8000, RETRY_DELAY_MS=1500, MAP_SETTLE_MS=3000;
 let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
@@ -350,13 +350,16 @@ async function globalSearch(){
     // Damit suchen wir das Live-Flugzeug bei adsb.lol, ohne das operative Callsign erraten zu muessen.
     resolvedFlight=await resolveViaAviationstack(q,run);
     if(run!==searchRun)return;
+    // v4.12: Den konkreten Aviationstack-Flug ueber BEIDE stabilen Flugzeug-IDs suchen.
+    // ICAO24 zuerst, Registrierung immer als unabhaengigen Fallback. Ein falscher/veralteter
+    // ICAO24-Treffer darf die Registrierung nicht verhindern.
     if(resolvedFlight?.hex)tries.push(['icao',resolvedFlight.hex,q]);
     if(resolvedFlight?.registration)tries.push(['reg',resolvedFlight.registration,q]);
-    // Kostenloser Fallback, falls Aviationstack keinen konkreten aktiven Flug liefert.
+    // Kostenloser Fallback nur, wenn Aviationstack keinen konkreten aktiven Flug liefert.
     if(!resolvedFlight){resolvedFlight=await resolvePublicFlightNumber(q,run);if(run!==searchRun)return;}
-    if(resolvedFlight?.icao&&resolvedFlight.icao!==q&&!resolvedFlight?.hex)tries.push(['callsign',resolvedFlight.icao,q]);
+    if(resolvedFlight?.icao&&resolvedFlight.icao!==q&&!resolvedFlight?.hex&&!resolvedFlight?.registration)tries.push(['callsign',resolvedFlight.icao,q]);
     const mappedCallsign=airlineFlightNumberToCallsign(q);
-    if(mappedCallsign&&mappedCallsign!==q&&mappedCallsign!==resolvedFlight?.icao&&!resolvedFlight?.hex)tries.push(['callsign',mappedCallsign,q]);
+    if(mappedCallsign&&mappedCallsign!==q&&mappedCallsign!==resolvedFlight?.icao&&!resolvedFlight?.hex&&!resolvedFlight?.registration)tries.push(['callsign',mappedCallsign,q]);
     tries.push(['callsign',q,q]);
     tries.push(['reg',q,q]);
   }
@@ -397,7 +400,17 @@ async function globalSearch(){
         if(run!==searchRun)return;
         found=await fetchSearch(kind,value,display,2);
       }
-      if(found&&found.length){list=found;break}
+      if(found&&found.length){
+        if(resolvedFlight&&(kind==='icao'||kind==='reg')){
+          const wantHex=normHex(resolvedFlight.hex||'');
+          const wantReg=String(resolvedFlight.registration||'').trim().toUpperCase();
+          const exact=found.filter(a=>(wantHex&&normHex(a.hex)===wantHex)||(wantReg&&String(a.registration||'').trim().toUpperCase()===wantReg));
+          if(exact.length){list=exact;break}
+          diagEvent('SUCHE Identitaet passt nicht',`${display} · ${kind}:${value}`);
+          continue;
+        }
+        list=found;break
+      }
     }
     if(run!==searchRun)return;
     if(list.length){
