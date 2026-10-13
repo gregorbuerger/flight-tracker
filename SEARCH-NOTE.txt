@@ -1,1 +1,1 @@
-v4.9: Aviationstack-Flugdaten haben nach einer erfolgreichen öffentlichen Flugnummernsuche Vorrang vor Routeset/ADSBDB und bleiben auch über den 15-s-Live-Refresh am ausgewählten ICAO24-Flugzeug erhalten. Route und Zeiten werden als aktueller Flug gekennzeichnet.
+v4.11: Öffentliche Flugnummern werden immer zuerst über Aviationstack aufgelöst. Ein lokaler/ungeprüfter Callsign-Treffer darf diesen Lookup nicht mehr abfangen. Aviationstack-Airline-Abfragen beim normalen Antippen wurden wieder entfernt.
