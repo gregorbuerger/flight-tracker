@@ -1,1 +1,1 @@
-v4.12: Flugnummernsuche matcht Aviationstack-Fluege robust ueber ICAO24 und Registrierung. Registrierung bleibt immer unabhaengiger Fallback; ungepruefte Callsign-Routen duerfen aktuelle Aviationstack-Flugdaten nicht ueberschreiben.
+v4.13: Keine kuenstlich aus Callsign-Datenbank erzeugten IATA-Flugnummern mehr. Ohne bestaetigte oeffentliche Flugnummer wird das echte ADS-B-/ICAO-Callsign angezeigt. Aviationstack-Flugnummern bleiben autoritativ.

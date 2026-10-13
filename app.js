@@ -6,7 +6,7 @@ let markerByHex=new Map(),center=[48,10],locationMarker=null,accuracyCircle=null
 let activeController=null,requestSeq=0,latestAppliedSeq=0,mapInteraction=false,mapReloadTimer=null,activeAbortReason='';
 let searching=false,searchController=null,searchRun=0;
 const enrichCache=new Map(),enrichPending=new Map(),routeCache=new Map(),routePending=new Map();
-const AVIATION_CACHE_KEY='flight-tracker-aviation-v412',AVIATION_CACHE_MS=2*60*60*1000;let aviationCache={};try{aviationCache=JSON.parse(localStorage.getItem(AVIATION_CACHE_KEY)||'{}')}catch(_){aviationCache={}}
+const AVIATION_CACHE_KEY='flight-tracker-aviation-v413',AVIATION_CACHE_MS=2*60*60*1000;let aviationCache={};try{aviationCache=JSON.parse(localStorage.getItem(AVIATION_CACHE_KEY)||'{}')}catch(_){aviationCache={}}
 function saveAviationCache(){try{localStorage.setItem(AVIATION_CACHE_KEY,JSON.stringify(aviationCache))}catch(_){}}
 const REFRESH_MS=15000, MOVE_MS=14000, REQUEST_TIMEOUT_MS=8000, RETRY_DELAY_MS=1500, MAP_SETTLE_MS=3000;
 let netDiag={attempt:0,lastMs:null,lastResult:'',lastAt:0};
@@ -133,7 +133,7 @@ function drawRoute(a){if(routeLayer){map.removeLayer(routeLayer);routeLayer=null
 function fillDetails(a){
   const e=a.enrichment||{},ac=e.aircraft||{},r=e.flightroute||{};
   const alt=metres(a.alt),speed=kmh(a.speed),heading=compass(a.track);
-  const flight=(a.publicFlight||r.callsign_iata||a.icaoCallsign||r.callsign_icao||a.flight||a.registration||'Unbekanntes Fluggerät').trim();
+  const flight=(a.publicFlight||a.icaoCallsign||r.callsign_icao||a.flight||a.registration||'Unbekanntes Fluggerät').trim();
   const airline=r.airline?.name||airlineName(a)||ac.registered_owner||'';
   const type=[ac.manufacturer,ac.type].filter(Boolean).join(' ')||a.aircraftType||'';
   const reg=ac.registration||a.registration||'';
@@ -155,7 +155,7 @@ function fillDetails(a){
 function addTrailPoint(a){if(!a.hex||a.lat==null||a.lon==null)return;let pts=trailByHex.get(a.hex)||[];const last=pts[pts.length-1];if(!last||Math.abs(last[0]-a.lat)>0.00005||Math.abs(last[1]-a.lon)>0.00005){pts.push([a.lat,a.lon]);if(pts.length>240)pts=pts.slice(-240);trailByHex.set(a.hex,pts)}if(normHex(a.hex)===normHex(selectedHex))drawTrail(a.hex)}
 function drawTrail(hex){if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}const pts=trailByHex.get(hex)||[];if(pts.length>1)trailLayer=L.polyline(pts,{color:'#ff9f0a',weight:3,opacity:.8}).addTo(map);if(selectedAircraft)drawRoute(selectedAircraft)}
 function normHex(v){return String(v||'').trim().toLowerCase()}
-function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};a.publicFlight=a.publicFlight||(fr.callsign_iata||'').trim().toUpperCase();a.icaoCallsign=a.icaoCallsign||(fr.callsign_icao||'').trim().toUpperCase();selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){if(!a.verifiedRoute?.aviationstack)a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
+function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};a.icaoCallsign=a.icaoCallsign||(fr.callsign_icao||'').trim().toUpperCase();selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){if(!a.verifiedRoute?.aviationstack)a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
 const svgPlane=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 3h6l3 23 19 10v6l-19-4-2 15 8 5v4l-12-2-12 2v-4l8-5-2-15-19 4v-6l19-10z"/></svg>`;
 const svgHeli=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13h48v4H35v8c8 1 14 7 15 15h7v5h-8c-2 7-8 11-16 11H20c-7 0-12-5-12-12 0-8 6-14 14-14h7V17H8zm14 23c-5 0-8 3-8 8 0 4 3 6 7 6h11V36zm16 0v14c4-1 7-4 7-8s-3-6-7-6z"/><path d="M46 24h4v9h-4zM50 27h10v4H50z"/></svg>`;
 const svgLight=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 6h6l2 22 20 7v6l-20-2-2 13 8 4v4l-11-2-11 2v-4l8-4-2-13-20 2v-6l20-7z"/></svg>`;
