@@ -273,8 +273,18 @@ const IATA_TO_ICAO_CALLSIGN={
   EK:'UAE',EY:'ETD',SV:'SVA',MS:'MSR',A3:'AEE',LO:'LOT',AC:'ACA',UA:'UAL',
   AA:'AAL',DL:'DAL',B6:'JBU',WN:'SWA',SQ:'SIA',CX:'CPA',JL:'JAL',NH:'ANA'
 };
+function looksLikeIcaoCallsign(q){
+  const v=String(q||'').replace(/\s+/g,'').toUpperCase();
+  // Operational ICAO callsigns normally start with a three-letter airline designator.
+  // Treat these as callsigns first so WZZ86 / RYR83SA / EXS74LT never enter the
+  // public-flight-number resolver.
+  return /^[A-Z]{3}[A-Z0-9]{1,5}$/.test(v);
+}
 function looksLikeAirlineFlightNumber(q){
-  return /^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(q)||/^[A-Z]{2,3}\d{2,4}$/.test(q);
+  const v=String(q||'').replace(/\s+/g,'').toUpperCase();
+  if(looksLikeIcaoCallsign(v))return false;
+  // Public/IATA flight number: two-character airline designator followed by number.
+  return /^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(v);
 }
 function airlineFlightNumberToCallsign(q){
   const m=q.replace(/\s+/g,'').match(/^([A-Z0-9]{2})(\d{1,4}[A-Z]?)$/);
@@ -353,6 +363,11 @@ async function globalSearch(){
   let resolvedFlight=null;
   if(/^[0-9A-F]{6}$/.test(compact))tries.push(['icao',compact.toLowerCase(),compact]);
   else if(q.includes('-'))tries.push(['reg',q,q]);
+  else if(looksLikeIcaoCallsign(q)){
+    // Operational ADS-B/ICAO callsign: search it directly. Never resolve it as a
+    // public flight number and never assign publicFlight from ADSBDB.
+    tries.push(['callsign',q,q]);
+  }
   else {
     // Oeffentliche Flugnummer: Aviationstack liefert die konkrete heutige Maschine samt ICAO24.
     // Damit suchen wir das Live-Flugzeug bei adsb.lol, ohne das operative Callsign erraten zu muessen.
