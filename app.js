@@ -130,10 +130,17 @@ function airportName(x){return x?[airportLabel(x),x.municipality||x.location,x.n
 function airportPin(x,kind){const start=kind==='start';return L.marker([x.lat,x.lon],{icon:L.divIcon({className:'',html:`<div class="apPin ${start?'apStart':'apEnd'}"><b>${start?'Start':'Landung'}</b><span>${airportLabel(x)}</span></div>`,iconSize:[0,0],iconAnchor:[0,0]}),interactive:false,keyboard:false,zIndexOffset:500})}
 function effectiveRoute(a){const v=a.verifiedRoute;if(v?.origin&&v?.destination)return{origin:v.origin,destination:v.destination,verified:true};const f=a.enrichment?.flightroute;if(f?.origin&&f?.destination){const n=x=>({iata_code:x.iata_code,icao_code:x.icao_code,municipality:x.municipality,name:x.name,lat:x.latitude!=null?x.latitude:x.lat,lon:x.longitude!=null?x.longitude:x.lon});return{origin:n(f.origin),destination:n(f.destination),verified:false}}return null}
 function drawRoute(a){if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}const r=effectiveRoute(a);if(!r?.destination||a.lat==null||a.lon==null)return;const o=r.origin,d=r.destination,g=L.layerGroup();if(o&&o.lat!=null&&o.lon!=null){g.addLayer(L.polyline([[o.lat,o.lon],[a.lat,a.lon]],{color:'#30d158',weight:3,opacity:.75}));g.addLayer(airportPin(o,'start'))}if(d.lat!=null&&d.lon!=null){g.addLayer(L.polyline([[a.lat,a.lon],[d.lat,d.lon]],{color:'#1677ff',weight:3,dashArray:'8 8',opacity:.8}));g.addLayer(airportPin(d,'end'))}routeLayer=g.addTo(map)}
+function displayFlightId(a){
+  const confirmed=String(a?.publicFlight||'').trim().toUpperCase();
+  if(confirmed)return confirmed;
+  const live=String(a?.flight||'').trim().toUpperCase();
+  if(live)return live;
+  return String(a?.registration||'Unbekanntes Fluggerät').trim();
+}
 function fillDetails(a){
   const e=a.enrichment||{},ac=e.aircraft||{},r=e.flightroute||{};
   const alt=metres(a.alt),speed=kmh(a.speed),heading=compass(a.track);
-  const flight=(a.publicFlight||a.icaoCallsign||r.callsign_icao||a.flight||a.registration||'Unbekanntes Fluggerät').trim();
+  const flight=displayFlightId(a);
   const airline=r.airline?.name||airlineName(a)||ac.registered_owner||'';
   const type=[ac.manufacturer,ac.type].filter(Boolean).join(' ')||a.aircraftType||'';
   const reg=ac.registration||a.registration||'';
@@ -155,7 +162,7 @@ function fillDetails(a){
 function addTrailPoint(a){if(!a.hex||a.lat==null||a.lon==null)return;let pts=trailByHex.get(a.hex)||[];const last=pts[pts.length-1];if(!last||Math.abs(last[0]-a.lat)>0.00005||Math.abs(last[1]-a.lon)>0.00005){pts.push([a.lat,a.lon]);if(pts.length>240)pts=pts.slice(-240);trailByHex.set(a.hex,pts)}if(normHex(a.hex)===normHex(selectedHex))drawTrail(a.hex)}
 function drawTrail(hex){if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}const pts=trailByHex.get(hex)||[];if(pts.length>1)trailLayer=L.polyline(pts,{color:'#ff9f0a',weight:3,opacity:.8}).addTo(map);if(selectedAircraft)drawRoute(selectedAircraft)}
 function normHex(v){return String(v||'').trim().toLowerCase()}
-function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};a.icaoCallsign=a.icaoCallsign||(fr.callsign_icao||'').trim().toUpperCase();selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){if(!a.verifiedRoute?.aviationstack)a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
+function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};/* Live-ADS-B-Callsign bleibt fuer die Anzeige massgeblich. */selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){if(!a.verifiedRoute?.aviationstack)a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
 const svgPlane=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 3h6l3 23 19 10v6l-19-4-2 15 8 5v4l-12-2-12 2v-4l8-5-2-15-19 4v-6l19-10z"/></svg>`;
 const svgHeli=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13h48v4H35v8c8 1 14 7 15 15h7v5h-8c-2 7-8 11-16 11H20c-7 0-12-5-12-12 0-8 6-14 14-14h7V17H8zm14 23c-5 0-8 3-8 8 0 4 3 6 7 6h11V36zm16 0v14c4-1 7-4 7-8s-3-6-7-6z"/><path d="M46 24h4v9h-4zM50 27h10v4H50z"/></svg>`;
 const svgLight=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 6h6l2 22 20 7v6l-20-2-2 13 8 4v4l-11-2-11 2v-4l8-4-2-13-20 2v-6l20-7z"/></svg>`;
@@ -233,7 +240,7 @@ function scheduleMapReload(){
 }
 const searchInput=document.querySelector('#flightSearch'),searchMsg=document.querySelector('#searchMsg');
 function showSearchMsg(t){searchMsg.textContent=t;searchMsg.classList.remove('hiddenSearch');clearTimeout(showSearchMsg.t);showSearchMsg.t=setTimeout(()=>searchMsg.classList.add('hiddenSearch'),5200)}
-function searchTokens(a){const r=a.enrichment?.flightroute||{};return[(a.publicFlight||''),(r.callsign_iata||''),(a.icaoCallsign||''),(r.callsign_icao||''),(a.flight||''),(a.registration||''),(a.hex||''),(a.aircraftType||'')].map(x=>String(x).trim().toUpperCase())}
+function searchTokens(a){const r=a.enrichment?.flightroute||{};return[(a.publicFlight||''),(a.icaoCallsign||''),(r.callsign_icao||''),(a.flight||''),(a.registration||''),(a.hex||''),(a.aircraftType||'')].map(x=>String(x).trim().toUpperCase())}
 function scoreSearch(a,q){const t=searchTokens(a);let score=0;for(const v of t){if(!v)continue;if(v===q)score=Math.max(score,100);else if(v.replace(/[-\s]/g,'')===q.replace(/[-\s]/g,''))score=Math.max(score,95);else if(v.startsWith(q))score=Math.max(score,70);else if(v.includes(q))score=Math.max(score,50)}return score}
 function selectSearchResult(found,q){
   const key=normHex(found.hex)||`${found.lat}:${found.lon}:${found.flight}`;
