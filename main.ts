@@ -1,149 +1,16 @@
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-function json(body: unknown, status = 200, cache = "no-store") {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...cors, "Content-Type": "application/json; charset=utf-8", "Cache-Control": cache },
-  });
-}
-
-async function upstream(url: string, init: RequestInit = {}) {
-  const started = performance.now();
-  const r = await fetch(url, {
-    ...init,
-    headers: { Accept: "application/json", ...(init.headers || {}) },
-  });
-  const upstreamMs = Math.round(performance.now() - started);
-  const text = await r.text();
-  let data: any = null;
-  try { data = JSON.parse(text); } catch (_) {}
-  if (!r.ok) {
-    return { ok: false, status: r.status, data, text: text.slice(0, 300), upstreamMs };
-  }
-  return { ok: true, status: r.status, data, upstreamMs };
-}
-
-function aircraftArray(data: any): any[] {
-  if (Array.isArray(data?.ac)) return data.ac;
-  if (Array.isArray(data?.aircraft)) return data.aircraft;
-  return [];
-}
-
-export default async function (req: Request): Promise<Response> {
-  if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-  if (req.method !== "GET") return json({ error: "Method not allowed", ft_relay_version: "4.7-relay" }, 405);
-
-  const u = new URL(req.url);
-
-  try {
-    // Explicit global searches on the already-working Val root URL.
-    const reg = (u.searchParams.get("reg") || "").trim().toUpperCase();
-    const callsign = (u.searchParams.get("callsign") || "").trim().toUpperCase();
-    const icao = (u.searchParams.get("icao") || "").trim().toLowerCase();
-
-    if (reg || callsign || icao) {
-      let kind = "";
-      let query = "";
-      let url = "";
-
-      if (reg) {
-        kind = "registration";
-        query = reg;
-        url = `https://api.adsb.lol/v2/reg/${encodeURIComponent(reg)}`;
-      } else if (icao) {
-        kind = "icao";
-        query = icao;
-        url = `https://api.adsb.lol/v2/icao/${encodeURIComponent(icao)}`;
-      } else {
-        kind = "callsign";
-        query = callsign;
-        url = `https://api.adsb.lol/v2/callsign/${encodeURIComponent(callsign)}`;
-      }
-
-      const r = await upstream(url);
-      if (!r.ok) {
-        return json({
-          ac: [],
-          ft_relay_version: "4.7-relay",
-          ft_mode: "search",
-          ft_match: kind,
-          ft_query: query,
-          ft_upstream_status: r.status,
-          ft_upstream_error: r.text || r.data || "upstream error",
-        }, 502);
-      }
-
-      const ac = aircraftArray(r.data);
-      return json({
-        ac,
-        total: ac.length,
-        ft_relay_version: "4.7-relay",
-        ft_mode: "search",
-        ft_match: kind,
-        ft_query: query,
-        ft_upstream_status: r.status,
-      });
-    }
-
-    // Positionsbezogene Routensuche: ?route=CALLSIGN&lat=...&lon=...
-    // Die Route wird serverseitig per POST bei adsb.lol abgefragt, damit die PWA
-    // keinen zweiten direkten Datenpfad benoetigt.
-    const route = (u.searchParams.get("route") || "").trim().toUpperCase();
-    if (route) {
-      const lat = Number(u.searchParams.get("lat"));
-      const lon = Number(u.searchParams.get("lon"));
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        return json({ error: "route requires lat and lon", ft_relay_version: "4.7-relay" }, 400);
-      }
-      const r = await upstream("https://api.adsb.lol/api/0/routeset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planes: [{ callsign: route, lat, lng: lon }] }),
-      });
-      if (!r.ok) {
-        return json({ error: "route upstream failed", ft_relay_version: "4.7-relay", ft_mode: "route", ft_upstream_status: r.status }, 502);
-      }
-      const rows = Array.isArray(r.data) ? r.data : [];
-      const row = rows[0] || null;
-      return json({ route: row, routes: rows, ft_relay_version: "4.7-relay", ft_mode: "route", ft_upstream_status: r.status });
-    }
-
-    // Existing map query: ?lat=...&lon=...&radius=...
-    const lat = Number(u.searchParams.get("lat"));
-    const lon = Number(u.searchParams.get("lon"));
-    const radius = Math.min(Math.max(Number(u.searchParams.get("radius")) || 100, 1), 250);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-      return json({
-        error: "Bitte lat und lon angeben oder reg/callsign/icao verwenden.",
-        ft_relay_version: "4.7-relay",
-      }, 400);
-    }
-
-    const r = await upstream(`https://api.adsb.lol/v2/point/${lat}/${lon}/${radius}`);
-    if (!r.ok) {
-      return json({
-        error: "ADS-B upstream failed",
-        ft_relay_version: "4.7-relay",
-        ft_mode: "point",
-        ft_upstream_status: r.status,
-      }, 502);
-    }
-
-    const data = r.data || {};
-    data.ft_relay_version = "4.7-relay";
-    data.ft_mode = "point";
-    data.ft_upstream_status = r.status;
-    data.ft_upstream_ms = r.upstreamMs;
-    return json(data, 200, "public, max-age=10");
-  } catch (err) {
-    return json({
-      error: "Flight-Tracker-Relayfehler",
-      detail: String(err),
-      ft_relay_version: "4.7-relay",
-    }, 502);
-  }
-}
+const RELAY_VERSION = "3.0-relay";
+const ADSB_BASE = "https://api.adsb.lol";
+const AVIATIONSTACK_BASE = "https://api.aviationstack.com/v1";
+const cors = {"Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"GET, OPTIONS","Access-Control-Allow-Headers":"Content-Type"};
+function json(data: unknown,status=200){return Response.json(data,{status,headers:cors})}
+async function fetchTextJson(url:string,init:RequestInit={}){const response=await fetch(url,{...init,headers:{Accept:"application/json",...(init.headers||{}),"User-Agent":"flight-tracker-private-project"}});const body=await response.text();let data:any=null;try{data=JSON.parse(body)}catch{};return {ok:response.ok,status:response.status,data,body:body.slice(0,1000),upstream:url}}
+async function fetchAdsb(path:string){return fetchTextJson(`${ADSB_BASE}${path}`)}
+async function fetchAviationstack(params:Record<string,string>){const apiKey=Deno.env.get("AVIATIONSTACK_API_KEY");if(!apiKey)return{ok:false,status:500,error:"AVIATIONSTACK_API_KEY fehlt"};const q=new URLSearchParams({access_key:apiKey,limit:"100",...params});const r=await fetchTextJson(`${AVIATIONSTACK_BASE}/flights?${q}`);return r.ok?{...r,error:null}:{...r,error:"Aviationstack nicht erreichbar"}}
+export default async function(req:Request):Promise<Response>{if(req.method==="OPTIONS")return new Response(null,{headers:cors});try{const url=new URL(req.url);
+ const flight=url.searchParams.get("flight");if(flight){const value=flight.trim().toUpperCase().replace(/\s+/g,"");const r=await fetchAviationstack({flight_iata:value});return r.ok?json({ft_relay_version:RELAY_VERSION,ft_match:"flight",query:value,source:"aviationstack",...r.data}):json({ft_relay_version:RELAY_VERSION,error:r.error,upstream_status:r.status,upstream_body:r.body},502)}
+ const airline=url.searchParams.get("airline");if(airline){const value=airline.trim().toUpperCase();const r=await fetchAviationstack({airline_iata:value,flight_status:"active"});return r.ok?json({ft_relay_version:RELAY_VERSION,ft_match:"airline_active",query:value,source:"aviationstack",...r.data}):json({ft_relay_version:RELAY_VERSION,error:r.error,upstream_status:r.status,upstream_body:r.body},502)}
+ const route=url.searchParams.get("route");if(route){const lat=Number(url.searchParams.get("lat")),lon=Number(url.searchParams.get("lon"));if(!Number.isFinite(lat)||!Number.isFinite(lon))return json({error:"route requires lat and lon",ft_relay_version:RELAY_VERSION},400);const r=await fetchTextJson(`${ADSB_BASE}/api/0/routeset`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({planes:[{callsign:route.trim().toUpperCase(),lat,lng:lon}]})});if(!r.ok)return json({error:"route upstream failed",ft_relay_version:RELAY_VERSION,upstream_status:r.status},502);const rows=Array.isArray(r.data)?r.data:[];return json({route:rows[0]||null,routes:rows,ft_relay_version:RELAY_VERSION})}
+ for(const [param,path,match,norm] of [["reg","reg","registration","upper"],["callsign","callsign","callsign","upper"],["icao","icao","icao","lower"]] as const){const raw=url.searchParams.get(param);if(raw){const value=norm==="upper"?raw.trim().toUpperCase():raw.trim().toLowerCase();const r=await fetchAdsb(`/v2/${path}/${encodeURIComponent(value)}`);return r.ok?json({ft_relay_version:RELAY_VERSION,ft_match:match,query:value,upstream:r.upstream,...r.data}):json({ft_relay_version:RELAY_VERSION,error:"ADSB-Upstream nicht erreichbar",upstream_status:r.status,upstream_body:r.body},502)}}
+ const latText=url.searchParams.get("lat"),lonText=url.searchParams.get("lon"),radiusText=url.searchParams.get("radius");if(latText!==null&&lonText!==null){const lat=Number(latText),lon=Number(lonText);let radius=Number(radiusText??"100");if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat< -90||lat>90||lon< -180||lon>180)return json({ft_relay_version:RELAY_VERSION,error:"Ungueltige Koordinaten"},400);if(!Number.isFinite(radius))radius=100;radius=Math.max(1,Math.min(250,radius));const r=await fetchAdsb(`/v2/point/${lat}/${lon}/${radius}`);return r.ok?json({ft_relay_version:RELAY_VERSION,ft_match:"point",upstream:r.upstream,...r.data}):json({ft_relay_version:RELAY_VERSION,error:"ADSB-Upstream nicht erreichbar",upstream_status:r.status,upstream_body:r.body},502)}
+ return json({ft_relay_version:RELAY_VERSION,ok:true,message:"Flight Tracker Relay bereit",examples:{flight:"?flight=FR2175",airline:"?airline=FR",registration:"?reg=9H-QBA",callsign:"?callsign=RYR9NZ",icao:"?icao=48C22F",route:"?route=RYR83SA&lat=48&lon=10",point:"?lat=47.98&lon=10.18&radius=100"}})
+}catch(error){return json({ft_relay_version:RELAY_VERSION,error:"Flight-Tracker-Relayfehler",detail:error instanceof Error?error.message:String(error)},500)}}
