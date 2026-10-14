@@ -22,7 +22,7 @@ function buildDiagText(){
   const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
   const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
   const lines=[
-    'Flight Tracker v4.18 - Live-Diagnose',
+    'Flight Tracker v4.19 - Live-Diagnose',
     `Export: ${new Date().toLocaleString('de-DE')}`,
     `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
     `Erfolg/Fehler: ${ok}/${bad}`,
@@ -160,14 +160,16 @@ async function loadFlightData(){
   const hex=normHex(a.hex);a.flightDataLoading=true;a.flightDataMessage='Abfrage läuft …';refreshFlightDataControls();
   try{
     const date=new Date().toISOString().slice(0,10);
-    const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('aerodatabox',hex.toUpperCase());u.searchParams.set('date',date);
+    const liveCall=String(a.adsbCallsign||a.flight||'').trim().toUpperCase().replace(/\s+/g,'');
+    if(!/^[A-Z0-9]{3,10}$/.test(liveCall)){a.flightDataMessage='Kein gültiges ADS-B-Rufzeichen für die Flugdatenabfrage vorhanden.';return;}
+    const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('aerodatabox',hex.toUpperCase());u.searchParams.set('callsign',liveCall);u.searchParams.set('date',date);
+    diagEvent('AERODATABOX Anfrage',`${hex.toUpperCase()} · ${liveCall} · ${date}`);
     const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),12000);
     let res;try{res=await fetch(u,{cache:'no-store',signal:controller.signal});}finally{clearTimeout(timeout)}
     const payload=await res.json();
-    if(!res.ok||!payload.verified||!payload.flight){a.flightDataMessage=res.status===429?'AeroDataBox-Kontingent erreicht.':payload.error||'Keine eindeutig passenden aktuellen Flugdaten gefunden.';return;}
+    if(!res.ok||!payload.verified||!payload.flight){a.flightDataMessage=res.status===429?'AeroDataBox-Kontingent erreicht.':payload.error||'Keine eindeutig passenden aktuellen Flugdaten gefunden.';diagEvent('AERODATABOX ohne Treffer',`${res.status} · ${payload.message||payload.error||''} · ${JSON.stringify(payload.diagnostics||{})}`);return;}
     const f=payload.flight;
     if(normHex(f.aircraft?.modeS)!==hex){a.flightDataMessage='Flugzeugidentität stimmt nicht überein.';return;}
-    const liveCall=String(a.adsbCallsign||a.flight||'').trim().toUpperCase();
     if(f.callSign&&liveCall&&String(f.callSign).trim().toUpperCase()!==liveCall){a.flightDataMessage='Rufzeichen passt nicht zum Live-Flugzeug.';return;}
     if(!f.number||!f.departure?.airport?.iata||!f.arrival?.airport?.iata){a.flightDataMessage='Flug gefunden, aber Flugnummer oder Route fehlen.';return;}
     const ap=x=>({iata_code:x.iata||'',icao_code:x.icao||'',municipality:x.municipalityName||'',name:x.name||'',lat:x.location?.lat,lon:x.location?.lon});
