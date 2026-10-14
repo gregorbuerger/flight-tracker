@@ -1,1 +1,1 @@
-v4.17: Keine kuenstlich aus Callsign-Datenbank erzeugten IATA-Flugnummern mehr. Ohne bestaetigte oeffentliche Flugnummer wird das echte ADS-B-/ICAO-Callsign angezeigt. Aviationstack-Flugnummern bleiben autoritativ.
+v4.18: Keine kuenstlich aus Callsign-Datenbank erzeugten IATA-Flugnummern mehr. Ohne bestaetigte oeffentliche Flugnummer wird das echte ADS-B-/ICAO-Callsign angezeigt. Aviationstack-Flugnummern bleiben autoritativ.

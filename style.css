@@ -84,3 +84,5 @@ footer{bottom:max(5px,calc(var(--safe-bottom) + 3px));max-width:calc(100vw - 110
 
 .apPin{transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;padding:3px 8px;border-radius:9px;color:#fff;font:600 11px/1.15 -apple-system,system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.45);white-space:nowrap;pointer-events:none}.apPin b{font-size:9px;letter-spacing:.06em;text-transform:uppercase;opacity:.9}.apPin span{font-size:13px}.apStart{background:#1f9d4a}.apEnd{background:#1677ff}
 .routeBox span#routeNames{white-space:normal;font-size:11px;line-height:1.25}
+
+.flightDataBtn{display:block;width:100%;margin:10px 0 4px;padding:12px 14px;border:1px solid #2980ed;border-radius:12px;background:#1767ca;color:white;font:inherit;font-weight:650;cursor:pointer}.flightDataBtn:disabled{opacity:.55;cursor:wait}.flightDataStatus{font-size:12px;line-height:1.4;color:#9db3c9;min-height:16px;margin:3px 0 7px}.flightDataBtn[hidden]{display:none}

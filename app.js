@@ -22,7 +22,7 @@ function buildDiagText(){
   const req=diagLog.filter(x=>!x.event),ok=req.filter(x=>x.ok).length,bad=req.length-ok;
   const avg=req.filter(x=>x.ok&&x.totalMs!=null);const avgMs=avg.length?Math.round(avg.reduce((a,x)=>a+x.totalMs,0)/avg.length):null;
   const lines=[
-    'Flight Tracker v4.17 - Live-Diagnose',
+    'Flight Tracker v4.18 - Live-Diagnose',
     `Export: ${new Date().toLocaleString('de-DE')}`,
     `Soll-Intervall: ${(REFRESH_MS/1000).toFixed(0)} s`,
     `Erfolg/Fehler: ${ok}/${bad}`,
@@ -137,6 +137,50 @@ function displayFlightId(a){
   if(live)return live;
   return String(a?.registration||'Unbekanntes Fluggerät').trim();
 }
+function formatAeroTimes(f){
+  const t=v=>{const m=String(v||'').match(/(\d{2}:\d{2})([+-]\d{2}:\d{2})?/);return m?m[1]+(m[2]?' UTC'+m[2]:''):''};
+  const d=t(f.departure?.runwayTime?.local||f.departure?.revisedTime?.local||f.departure?.scheduledTime?.local);
+  const a=t(f.arrival?.revisedTime?.local||f.arrival?.scheduledTime?.local);
+  return [d&&'Abflug '+d,a&&'Ankunft '+a,f.status&&'Status '+f.status].filter(Boolean).join(' · ');
+}
+function refreshFlightDataControls(){
+  const a=selectedAircraft;
+  const done=!!a?.aerodatabox;
+  for(const id of ['flightDataBtn','detailFlightDataBtn']){
+    const b=document.getElementById(id);if(!b)continue;
+    b.hidden=!a?.hex||done;
+    b.disabled=!!a?.flightDataLoading;
+    b.textContent=a?.flightDataLoading?'Flugdaten werden geladen …':'Flugdaten laden';
+  }
+  const msg=a?.flightDataMessage|| (done?'Aktuelle Flugdaten: AeroDataBox':'');
+  for(const id of ['flightDataStatus','detailFlightDataStatus']){const el=document.getElementById(id);if(el)el.textContent=msg;}
+}
+async function loadFlightData(){
+  const a=selectedAircraft;if(!a?.hex||a.flightDataLoading)return;
+  const hex=normHex(a.hex);a.flightDataLoading=true;a.flightDataMessage='Abfrage läuft …';refreshFlightDataControls();
+  try{
+    const date=new Date().toISOString().slice(0,10);
+    const u=new URL('https://gregorflighttracker.val.run/');u.searchParams.set('aerodatabox',hex.toUpperCase());u.searchParams.set('date',date);
+    const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),12000);
+    let res;try{res=await fetch(u,{cache:'no-store',signal:controller.signal});}finally{clearTimeout(timeout)}
+    const payload=await res.json();
+    if(!res.ok||!payload.verified||!payload.flight){a.flightDataMessage=res.status===429?'AeroDataBox-Kontingent erreicht.':payload.error||'Keine eindeutig passenden aktuellen Flugdaten gefunden.';return;}
+    const f=payload.flight;
+    if(normHex(f.aircraft?.modeS)!==hex){a.flightDataMessage='Flugzeugidentität stimmt nicht überein.';return;}
+    const liveCall=String(a.adsbCallsign||a.flight||'').trim().toUpperCase();
+    if(f.callSign&&liveCall&&String(f.callSign).trim().toUpperCase()!==liveCall){a.flightDataMessage='Rufzeichen passt nicht zum Live-Flugzeug.';return;}
+    if(!f.number||!f.departure?.airport?.iata||!f.arrival?.airport?.iata){a.flightDataMessage='Flug gefunden, aber Flugnummer oder Route fehlen.';return;}
+    const ap=x=>({iata_code:x.iata||'',icao_code:x.icao||'',municipality:x.municipalityName||'',name:x.name||'',lat:x.location?.lat,lon:x.location?.lon});
+    a.publicFlight=String(f.number).replace(/\s+/g,'').toUpperCase();
+    a.aerodatabox=f;
+    a.verifiedRoute={origin:ap(f.departure.airport),destination:ap(f.arrival.airport),verified:true,aerodatabox:true};
+    a.flightDataMessage='Flugnummer und Route über AeroDataBox zugeordnet.';
+    diagEvent('AERODATABOX Treffer',`${a.publicFlight} · ${hex.toUpperCase()} · ${payload.cache||''}`);
+  }catch(e){a.flightDataMessage='Flugdaten momentan nicht erreichbar.';diagEvent('AERODATABOX Fehler',String(e?.message||e));}
+  finally{a.flightDataLoading=false;if(normHex(selectedHex)===hex){const current=selectedAircraft||a;if(current!==a){current.publicFlight=a.publicFlight||current.publicFlight;current.aerodatabox=a.aerodatabox||current.aerodatabox;current.verifiedRoute=a.verifiedRoute||current.verifiedRoute;current.flightDataMessage=a.flightDataMessage;current.flightDataLoading=false;}selectedAircraft=current;fillDetails(current);drawRoute(current);refreshFlightDataControls();}}
+}
+document.getElementById('flightDataBtn')?.addEventListener('click',loadFlightData);
+document.getElementById('detailFlightDataBtn')?.addEventListener('click',loadFlightData);
 function fillDetails(a){
   const e=a.enrichment||{},ac=e.aircraft||{},r=e.flightroute||{};
   const alt=metres(a.alt),speed=kmh(a.speed),heading=compass(a.track);
@@ -150,19 +194,19 @@ function fillDetails(a){
   document.querySelector('#reg').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   document.querySelector('#detailType').textContent=[type,reg&&('· '+reg)].filter(Boolean).join(' ')||'Keine weiteren Angaben';
   const vr=effectiveRoute(a),o=vr?.origin||null,d=vr?.destination||null;const routeText=o&&d?`${airportLabel(o)} → ${airportLabel(d)}`:'Route nicht sicher bestimmt';
-  const av=a.aviation||null;const tf=v=>{if(!v)return'';const m=String(v).match(/T(\d{2}):(\d{2})/);return m?m[1]+':'+m[2]:''};const tz=v=>{if(!v)return'';try{return new Intl.DateTimeFormat('de-DE',{timeZone:v,timeZoneName:'short'}).formatToParts(new Date()).find(x=>x.type==='timeZoneName')?.value||v}catch(_){return v}};const timeBits=av?[av.departure?.actual&&('Abflug '+tf(av.departure.actual)+(av.departure?.timezone?' '+tz(av.departure.timezone):'')),av.arrival?.estimated&&('Ankunft erwartet '+tf(av.arrival.estimated)+(av.arrival?.timezone?' '+tz(av.arrival.timezone):'')),av.departure?.gate&&('Gate '+av.departure.gate)].filter(Boolean).join(' · '):'';const routeSource=a.verifiedRoute?.aviationstack?' · aktueller Flug':(vr?.verified?'':' (laut Callsign-Datenbank, nicht geprüft)');const routeNames=o&&d?`Start: ${airportName(o)} → Landung: ${airportName(d)}${routeSource}${timeBits?' · '+timeBits:''}`:'Für diesen Flug liegen keine Start-/Zieldaten vor.';
+  const av=a.aviation||null;const tf=v=>{if(!v)return'';const m=String(v).match(/T(\d{2}):(\d{2})/);return m?m[1]+':'+m[2]:''};const tz=v=>{if(!v)return'';try{return new Intl.DateTimeFormat('de-DE',{timeZone:v,timeZoneName:'short'}).formatToParts(new Date()).find(x=>x.type==='timeZoneName')?.value||v}catch(_){return v}};const timeBits=av?[av.departure?.actual&&('Abflug '+tf(av.departure.actual)+(av.departure?.timezone?' '+tz(av.departure.timezone):'')),av.arrival?.estimated&&('Ankunft erwartet '+tf(av.arrival.estimated)+(av.arrival?.timezone?' '+tz(av.arrival.timezone):'')),av.departure?.gate&&('Gate '+av.departure.gate)].filter(Boolean).join(' · '):'';const routeSource=a.verifiedRoute?.aerodatabox?' · aktueller Flug · AeroDataBox':a.verifiedRoute?.aviationstack?' · aktueller Flug':(vr?.verified?'':' (laut Callsign-Datenbank, nicht geprüft)');const extra=a.aerodatabox?formatAeroTimes(a.aerodatabox):timeBits;const routeNames=o&&d?`Start: ${airportName(o)} → Landung: ${airportName(d)}${routeSource}${extra?' · '+extra:''}`:'Für diesen Flug liegen keine Start-/Zieldaten vor.';
   const routeBox=document.querySelector('.routeBox');document.querySelector('#route').textContent=routeText;routeBox.classList.toggle('noRoute',!o&&!d);document.querySelector('#routeNames').textContent=routeNames;
   document.querySelector('#detailRoute').textContent=routeText;document.querySelector('#detailRouteNames').textContent=routeNames;
   const photo=ac.url_photo||ac.url_photo_thumbnail||'';const img=document.querySelector('#detailPhoto');if(photo){img.src=photo;img.classList.remove('hiddenPhoto')}else{img.removeAttribute('src');img.classList.add('hiddenPhoto')}
   document.querySelector('#alt').textContent=alt;document.querySelector('#speed').textContent=speed;document.querySelector('#heading').textContent=heading;document.querySelector('#altDetail').textContent=alt;document.querySelector('#speedDetail').textContent=speed;document.querySelector('#headingDetail').textContent=heading;document.querySelector('#rate').textContent=a.rate==null?'—':Math.abs(Math.round(a.rate*60))+' m/min '+(a.rate>.5?'↑':a.rate<-.5?'↓':'→');
   const facts=[]; if(a.oat!=null)facts.push(['Außentemperatur',celsius(a.oat),'🌡️']); if(a.windDir!=null&&a.windSpeed!=null)facts.push(['Wind',windText(a.windDir,a.windSpeed),'💨']); if(a.mach!=null)facts.push(['Reisegeschwindigkeit',machText(a.mach),'🚀']); if(a.altGeom!=null)facts.push(['Geometrische Höhe',metres(a.altGeom),'📏']);
   const factsEl=document.querySelector('#interestingFacts'); factsEl.innerHTML=facts.map(([k,v,i])=>`<div class="fact"><span>${i}</span><small>${k}</small><strong>${v}</strong></div>`).join(''); factsEl.classList.toggle('hiddenFacts',!facts.length);
-  document.querySelector('#tech').textContent=[a.hex&&('ICAO '+a.hex.toUpperCase()),a.squawk&&('Squawk '+a.squawk),a.source&&('Positionsquelle '+a.source.toUpperCase()),a.tas!=null&&('TAS '+Math.round(a.tas*1.852)+' km/h'),a.ias!=null&&('IAS '+Math.round(a.ias*1.852)+' km/h'),ac.registered_owner&&('Halter '+ac.registered_owner)].filter(Boolean).join(' · ')||'Live-Positionsdaten';drawRoute(a)
+  document.querySelector('#tech').textContent=[a.hex&&('ICAO '+a.hex.toUpperCase()),a.squawk&&('Squawk '+a.squawk),a.source&&('Positionsquelle '+a.source.toUpperCase()),a.tas!=null&&('TAS '+Math.round(a.tas*1.852)+' km/h'),a.ias!=null&&('IAS '+Math.round(a.ias*1.852)+' km/h'),ac.registered_owner&&('Halter '+ac.registered_owner)].filter(Boolean).join(' · ')||'Live-Positionsdaten';drawRoute(a);refreshFlightDataControls()
 }
 function addTrailPoint(a){if(!a.hex||a.lat==null||a.lon==null)return;let pts=trailByHex.get(a.hex)||[];const last=pts[pts.length-1];if(!last||Math.abs(last[0]-a.lat)>0.00005||Math.abs(last[1]-a.lon)>0.00005){pts.push([a.lat,a.lon]);if(pts.length>240)pts=pts.slice(-240);trailByHex.set(a.hex,pts)}if(normHex(a.hex)===normHex(selectedHex))drawTrail(a.hex)}
 function drawTrail(hex){if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}const pts=trailByHex.get(hex)||[];if(pts.length>1)trailLayer=L.polyline(pts,{color:'#ff9f0a',weight:3,opacity:.8}).addTo(map);if(selectedAircraft)drawRoute(selectedAircraft)}
 function normHex(v){return String(v||'').trim().toLowerCase()}
-function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};/* Live-ADS-B-Callsign bleibt fuer die Anzeige massgeblich. */selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){if(!a.verifiedRoute?.aviationstack)a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
+function selectAircraft(a){selectedHex=normHex(a.hex)||null;selectedAircraft=a;selectedMissingSince=0;fillDetails(a);sheet.classList.remove('detail');sheet.classList.add('compact');sheet.classList.remove('hidden');drawTrail(selectedHex);refreshMarkerStyles();requestAnimationFrame(()=>keepSelectedVisible(a,true));enrichAircraft(a).then(e=>{if(e&&normHex(selectedHex)===normHex(a.hex)){a.enrichment=e;const fr=e.flightroute||{};/* Live-ADS-B-Callsign bleibt fuer die Anzeige massgeblich. */selectedAircraft=a;fillDetails(a)}});lookupVerifiedRoute(a).then(r=>{if(normHex(selectedHex)===normHex(a.hex)){if(!a.verifiedRoute?.aviationstack&&!a.verifiedRoute?.aerodatabox)a.verifiedRoute=r;selectedAircraft=a;fillDetails(a);drawRoute(a);requestAnimationFrame(()=>keepSelectedVisible(a,true))}})}
 const svgPlane=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 3h6l3 23 19 10v6l-19-4-2 15 8 5v4l-12-2-12 2v-4l8-5-2-15-19 4v-6l19-10z"/></svg>`;
 const svgHeli=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13h48v4H35v8c8 1 14 7 15 15h7v5h-8c-2 7-8 11-16 11H20c-7 0-12-5-12-12 0-8 6-14 14-14h7V17H8zm14 23c-5 0-8 3-8 8 0 4 3 6 7 6h11V36zm16 0v14c4-1 7-4 7-8s-3-6-7-6z"/><path d="M46 24h4v9h-4zM50 27h10v4H50z"/></svg>`;
 const svgLight=`<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M29 6h6l2 22 20 7v6l-20-2-2 13 8 4v4l-11-2-11 2v-4l8-4-2-13-20 2v-6l20-7z"/></svg>`;
@@ -193,7 +237,7 @@ function animateMarker(obj,a){
 }
 function draw(list){lastGood=list;const next=new Map();for(const a of list){if(a.lat==null||a.lon==null)continue;addTrailPoint(a);const key=normHex(a.hex)||`${a.lat}:${a.lon}:${a.flight}`;let obj=markerByHex.get(key);if(obj){obj.aircraft=a;animateMarker(obj,a);obj.marker.setIcon(craftIcon(a,normHex(key)===normHex(selectedHex)))}else{const m=L.marker([a.lat,a.lon],{icon:craftIcon(a,normHex(key)===normHex(selectedHex)),keyboard:false,riseOnHover:true}).addTo(map);obj={marker:m,aircraft:a};m.on('click',()=>selectAircraft(obj.aircraft))}next.set(key,obj)}if(selectedHex&&!next.has(selectedHex)&&markerByHex.has(selectedHex)){if(!selectedMissingSince)selectedMissingSince=Date.now();if(Date.now()-selectedMissingSince<20000){const held=markerByHex.get(selectedHex);held.marker.setIcon(craftIcon(held.aircraft,true));held.marker.setZIndexOffset(2000);next.set(selectedHex,held)}}for(const [key,obj] of markerByHex)if(!next.has(key)){if(obj.animFrame)cancelAnimationFrame(obj.animFrame);map.removeLayer(obj.marker);}markerByHex=next;if(selectedHex&&markerByHex.has(selectedHex)){const fresh=markerByHex.get(selectedHex).aircraft;if(list.some(a=>normHex(a.hex)===normHex(selectedHex))){selectedMissingSince=0;fresh.enrichment=fresh.enrichment||selectedAircraft?.enrichment;
 fresh.verifiedRoute=fresh.verifiedRoute||selectedAircraft?.verifiedRoute;
-fresh.aviation=fresh.aviation||selectedAircraft?.aviation;
+fresh.aviation=fresh.aviation||selectedAircraft?.aviation;fresh.aerodatabox=fresh.aerodatabox||selectedAircraft?.aerodatabox;fresh.flightDataMessage=fresh.flightDataMessage||selectedAircraft?.flightDataMessage;fresh.flightDataLoading=!!selectedAircraft?.flightDataLoading;
 fresh.publicFlight=fresh.publicFlight||selectedAircraft?.publicFlight;
 fresh.icaoCallsign=fresh.icaoCallsign||selectedAircraft?.icaoCallsign;
 fresh.adsbCallsign=fresh.adsbCallsign||selectedAircraft?.adsbCallsign||String(fresh.flight||'').trim().toUpperCase();selectedAircraft=fresh;fillDetails(selectedAircraft);drawRoute(selectedAircraft)}markerByHex.get(selectedHex).marker.setZIndexOffset(2000)}else if(selectedHex&&selectedMissingSince&&Date.now()-selectedMissingSince>=20000){selectedHex=null;selectedAircraft=null;selectedMissingSince=0;sheet.classList.add('hidden');if(trailLayer){map.removeLayer(trailLayer);trailLayer=null}if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}}refreshMarkerStyles();requestAnimationFrame(refreshMarkerStyles);lastSuccess=Date.now();failCount=0;notice.classList.add('hiddenNotice');updateStatus()}
